@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+*.pkl
+.env
+
+# Node
+node_modules/
+.next/
+dist/
+.env.local
+
+# macOS / VS Code
+.DS_Store
+.vscode/
