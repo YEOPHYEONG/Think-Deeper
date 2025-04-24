@@ -5,23 +5,32 @@
 import { useEffect, useRef, useState } from "react";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
-import { sendMessage, fetchSessionMessages } from "@/lib/api";
+import {
+  sendMessage,
+  fetchSessionMessages,
+  Message,
+  ApiError,
+} from "@/lib/api";
 import { ChatBubble, ChatRole } from "./ChatBubble";
 
 export function TurnExchange({ sessionId }: { sessionId: string }) {
   const [input, setInput] = useState("");
-  const [messages, setMessages] = useState<{ role: ChatRole; content: string }[]>([]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  // 1. Load from server on mount
+  // 1) 세션 히스토리 로드
   useEffect(() => {
     const loadHistory = async () => {
       try {
         const history = await fetchSessionMessages(sessionId);
         setMessages(history);
-      } catch (err) {
-        console.error("초기 메시지 불러오기 실패", err);
+      } catch (e) {
+        console.error("초기 메시지 불러오기 실패", e);
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: "❌ 히스토리 로드 실패" },
+        ]);
       }
     };
     loadHistory();
@@ -29,41 +38,60 @@ export function TurnExchange({ sessionId }: { sessionId: string }) {
 
   const handleSend = async () => {
     if (!input.trim()) return;
-    setMessages(prev => [...prev, { role: "user", content: input }]);
+    const userMsg: Message = { role: "user", content: input };
+    setMessages((prev) => [...prev, userMsg]);
     setLoading(true);
     setInput("");
 
     try {
-      const result = await sendMessage(sessionId, input);
-      setMessages(prev => [...prev, { role: "assistant", content: result }]);
-    } catch (e) {
-      setMessages(prev => [
-        ...prev,
-        { role: "assistant", content: "❌ 응답 오류: 백엔드 연결 확인" },
-      ]);
+      const assistantMsg = await sendMessage(sessionId, input);
+      setMessages((prev) => [...prev, assistantMsg]);
+    } catch (e: unknown) {
+      if (e instanceof ApiError) {
+        // HTTP 상태별 분기 가능
+        if (e.status === 401) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: "assistant",
+              content: "❌ 세션이 만료되었습니다. 새로고침 후 다시 시도해주세요.",
+            },
+          ]);
+        } else {
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: "assistant",
+              content: `❌ 서버 오류(${e.status}): ${e.message}`,
+            },
+          ]);
+        }
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: "❌ 네트워크 오류 발생" },
+        ]);
+      }
     } finally {
       setLoading(false);
     }
   };
 
+  // 스크롤 맨 아래로
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
   return (
     <div className="relative flex flex-col h-full">
-      {/* 메시지 목록 */}
       <div className="flex-1 overflow-y-auto px-4 py-6 space-y-4 pb-36">
         {messages.map((msg, idx) => (
-          <ChatBubble key={idx} role={msg.role} content={msg.content} />
+          <ChatBubble key={idx} role={msg.role as ChatRole} content={msg.content} />
         ))}
-        {loading && (
-          <ChatBubble role="assistant" content="답변 작성 중..." />
-        )}
+        {loading && <ChatBubble role="assistant" content="답변 작성 중..." />}
         <div ref={bottomRef} />
       </div>
 
-      {/* 플로팅 입력창 */}
       <div className="absolute bottom-4 left-0 right-0 px-4">
         <form
           onSubmit={(e) => {
