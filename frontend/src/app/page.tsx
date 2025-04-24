@@ -2,22 +2,21 @@
 
 "use client";
 
-import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { createSession } from "@/lib/api";
 import { TopicInput } from "@/components/TopicInput";
-import { TurnExchange } from "@/components/TurnExchange";
 
 export default function Home() {
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  const router = useRouter();
 
   const handleStart = async (topic: string) => {
     const id = await createSession(topic);
-    setSessionId(id);
+    router.push(`/chat/${id}?topic=${encodeURIComponent(topic)}`);
   };
 
   return (
     <main className="min-h-screen bg-[#0c0c1a] px-4 py-10">
-      {!sessionId ? <TopicInput onStart={handleStart} /> : <TurnExchange sessionId={sessionId} />}
+      <TopicInput onStart={handleStart} />
     </main>
   );
 }

@@ -72,7 +72,7 @@ def create_critic_agent(model_client: ChatCompletionClient) -> AssistantAgent:
 - 상대가 쓴 언어(한국어/영어)에 맞춰 응답하고, 끝맺음에 “끝” 같은 키워드는 사용하지 않습니다.
 
 ---
-출력은 상대방으 비판과 너의 주장 그리고 근거만 개조식으로 출력합니다.
+출력은 상대방의 주장에 비판과 너의 주장 그리고 근거만 개조식으로 markdown형식으로 출력합니다.
 """
 
     critic_agent = AssistantAgent( # 'autogen.' 접두사 없음

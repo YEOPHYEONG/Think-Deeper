@@ -2,6 +2,7 @@
 from fastapi import APIRouter, HTTPException, status, Path
 # 경로를 조정하여 core 및 models 모듈 임포트
 from ....core import orchestration
+from ....core.orchestration import run_conversation_turn_langgraph
 from ....models.chat import SendMessageRequest, MessageResponse
 
 router = APIRouter()
@@ -24,7 +25,7 @@ async def send_message(
     print(f"API: 세션 {session_id}에 메시지 수신: '{request.content}'")
     try:
         # 핵심 오케스트레이션 함수 호출 (비동기)
-        critic_response = await orchestration.run_conversation_turn(
+        critic_response = await run_conversation_turn_langgraph(
             session_id,
             request.content
         )
