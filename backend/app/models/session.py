@@ -1,13 +1,10 @@
 # backend/app/models/session.py
 from pydantic import BaseModel, Field
-import uuid # 세션 ID 생성을 위해 추가
+from typing import Optional # Optional 임포트
 
 class SessionCreateRequest(BaseModel):
-    """새 대화 세션 생성을 위한 요청 모델"""
     topic: str = Field(..., description="대화의 초기 주제")
+    initial_agent_type: Optional[str] = Field(None, description="초기 대화 대상 에이전트 타입") # 필드 추가
 
 class SessionCreateResponse(BaseModel):
-    """새 대화 세션 생성 후 응답 모델"""
     session_id: str = Field(description="생성된 고유 세션 ID")
-    # 초기 메시지를 포함할 수도 있음 (선택 사항)
-    # initial_message: MessageResponse | None = None

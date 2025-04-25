@@ -52,3 +52,4 @@ langgraph
 langchain-openai 
 langchain-core
 langchain-community
+langchain-google-genai

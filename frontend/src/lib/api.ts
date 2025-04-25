@@ -5,10 +5,6 @@ export interface Message {
   content: string;
 }
 
-/**
- * API 호출 중 상태 코드, 에러 메시지, 타임아웃/취소를 
- * 일관되게 처리하는 공통 헬퍼
- */
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message);
@@ -24,11 +20,14 @@ async function request<T>(
   {
     method = "GET",
     body,
-    timeoutMs = 10000, // 10초 타임아웃
+    timeoutMs = 60000, // 60초 타임아웃
   }: { method?: string; body?: any; timeoutMs?: number } = {}
 ): Promise<T> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => {
+      console.warn(`API Request timed out after ${timeoutMs}ms: ${method} ${path}`);
+      controller.abort("Request timed out"); // 타임아웃 시 메시지 포함
+  }, timeoutMs);
 
   let res: Response;
   try {
@@ -38,27 +37,49 @@ async function request<T>(
       body: body ? JSON.stringify(body) : undefined,
       signal: controller.signal,
     });
-  } finally {
+  } catch(e) {
+      // AbortError 또는 네트워크 오류 처리
+      if (e instanceof DOMException && e.name === 'AbortError') {
+         throw new ApiError(408, controller.signal.reason ?? 'Request timed out');
+      }
+      throw e; // 다른 네트워크 오류 등은 그대로 전파
+  }
+  finally {
     clearTimeout(timer);
   }
 
   if (!res.ok) {
-    const errorText = await res.text().catch(() => res.statusText);
-    throw new ApiError(res.status, `HTTP ${res.status}: ${errorText}`);
+    // 백엔드 오류 메시지 파싱 개선
+    let errorData: any = null;
+    try {
+      errorData = await res.json();
+    } catch { /* JSON 파싱 실패 시 무시 */ }
+    const detail = errorData?.detail ?? res.statusText;
+    const errorMessage = `HTTP ${res.status}: ${detail}`;
+    console.error("API Error:", errorMessage, errorData); // 상세 로그 추가
+    throw new ApiError(res.status, errorMessage);
   }
 
+  // No Content 응답 처리 (세션 생성 등에서 필요할 수 있음)
+  if (res.status === 204) {
+      return {} as T; // 빈 객체 반환 (타입 주의)
+  }
+
+  // 성공 시 JSON 반환
   return (await res.json()) as T;
 }
 
 /**
- * 새 세션 생성
+ * 새 세션 생성 (초기 에이전트 타입 지정)
  */
 export async function createSession(
-  topic: string
+  topic: string,
+  agentType: string // agentType 인자 추가
 ): Promise<string> {
+  // --- 요청 본문에 initial_agent_type 포함 ---
   const data = await request<{ session_id: string }>("/sessions", {
     method: "POST",
-    body: { topic },
+    body: { topic, initial_agent_type: agentType },
   });
   return data.session_id;
 }
@@ -70,9 +91,11 @@ export async function sendMessage(
   sessionId: string,
   content: string
 ): Promise<Message> {
+  // --- 타임아웃 값을 더 길게 설정할 수 있음 (예: 120초) ---
   const data = await request<Message>(`/sessions/${sessionId}/message`, {
     method: "POST",
     body: { content },
+    timeoutMs: 120000 // 예: LLM 응답을 위해 120초로 늘림
   });
   return data;
 }
