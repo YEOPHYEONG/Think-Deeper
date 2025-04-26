@@ -5,9 +5,9 @@ from langchain_core.messages import SystemMessage, BaseMessage, AIMessage, Human
 from langchain_core.pydantic_v1 import BaseModel, Field
 
 # LLM Provider 및 상태 모델 임포트
-# 동기 질문은 깊이 있는 사고를 유도해야 하므로 고성능 모델 사용
 from ...core.llm_provider import get_high_performance_llm
-from ...models.graph_state import GraphState # 또는 WhyGraphState
+# from ...models.why_graph_state import WhyGraphState # 실제 정의된 WhyGraphState 임포트 가정
+from ...models.why_graph_state import WhyGraphState
 
 # 구조화된 출력을 위한 Pydantic 모델 정의
 class MotivationQuestionOutput(BaseModel):
@@ -15,35 +15,50 @@ class MotivationQuestionOutput(BaseModel):
     motivation_question: str = Field(description="파악된 아이디어를 바탕으로 사용자의 근본적인 동기나 목적을 묻는 가장 적절한 단 하나의 개방형 질문입니다.")
     # rationale: Optional[str] = Field(None, description="해당 질문을 선택한 간단한 이유 (내부 로깅/디버깅용)")
 
-async def ask_motivation_why_node(state: GraphState) -> Dict[str, Any]:
+async def ask_motivation_why_node(state: WhyGraphState) -> Dict[str, Any]:
     """
     Ask Motivation Why 노드: 파악된 아이디어 요약을 바탕으로
     사용자의 핵심 동기(Why)를 묻는 첫 번째 질문을 생성하고 메시지에 추가합니다.
+    (수정됨: 입력 상태 확인 로직 우선 실행)
     """
     print("--- Ask Motivation Why Node 실행 ---")
 
-    # LLM 클라이언트 가져오기
-    try:
-        llm_questioner = get_high_performance_llm() # 통찰력 있는 질문 생성을 위해 고성능 모델 사용
-        structured_llm = llm_questioner.with_structured_output(MotivationQuestionOutput)
-    except Exception as e:
-        print(f"AskMotivationWhy: LLM 클라이언트 로드 실패 - {e}")
-        return {"error_message": f"LLM 클라이언트 로드 실패: {e}"}
-
-    # 상태 정보 읽기
+    # --- 1. 상태 정보 읽기 및 필수 입력 확인 (LLM 로드 전) ---
     try:
         # 이전 노드에서 생성한 아이디어 요약을 가져옴
         idea_summary = state.get('idea_summary')
+        # *** 중요: idea_summary 확인을 먼저 수행 ***
         if not idea_summary:
+            print("AskMotivationWhy Error: idea_summary is missing in state.")
+            # idea_summary가 없으면 LLM 호출 없이 즉시 오류 반환
             return {"error_message": "AskMotivationWhy: 상태에 아이디어 요약(idea_summary)이 없습니다."}
 
-        messages = state['messages'] # 메시지 기록 참조 (선택적)
+        messages = state.get('messages', []) # 메시지 기록 참조 (선택적)
 
     except KeyError as e:
         print(f"AskMotivationWhy: 상태 객체에서 필수 키 누락 - {e}")
         return {"error_message": f"AskMotivationWhy 상태 객체 키 누락: {e}"}
+    # --- ---
 
-    # 시스템 프롬프트 구성
+    # --- 2. LLM 클라이언트 가져오기 (입력 확인 후) ---
+    try:
+        llm_questioner = get_high_performance_llm() # 통찰력 있는 질문 생성을 위해 고성능 모델 사용
+        structured_llm = llm_questioner.with_structured_output(MotivationQuestionOutput)
+    except Exception as e:
+        # LLM 로드 실패는 실행 환경 문제일 수 있음 (예: API 키)
+        print(f"AskMotivationWhy: LLM 클라이언트 로드 실패 - {e}")
+        # LLM 로드 실패 시 사용자에게 보여줄 메시지 생성 및 반환
+        error_content = f"(시스템 오류: 질문 생성 준비 중 오류 발생 - {e})"
+        # 기존 메시지에 오류 메시지 누적
+        return {
+            "error_message": f"LLM 클라이언트 로드 실패: {e}",
+            "messages": messages + [AIMessage(content=error_content)]
+        }
+
+    # --- ---
+
+    # --- 3. 시스템 프롬프트 구성 ---
+    # 이제 idea_summary가 존재함이 보장됨
     system_prompt_text = f"""
 # 역할: 당신은 사용자의 아이디어나 생각 이면에 있는 **근본적인 동기, 목적, 또는 추구하는 가치('Why')**를 탐색하도록 돕는 AI 질문자입니다. 당신의 목표는 사용자가 제시한 아이디어 요약을 바탕으로, 그 아이디어를 추진하게 만드는 **가장 핵심적인 이유**에 대해 성찰하도록 유도하는 **단 하나의 통찰력 있는 개방형 질문**을 던지는 것입니다. (참고: 골든 서클 - Why -> How -> What)
 
@@ -59,45 +74,40 @@ async def ask_motivation_why_node(state: GraphState) -> Dict[str, Any]:
 
 # 출력 지침: 위 역할과 지침에 따라, 제공된 아이디어 요약에 대해 사용자의 핵심 동기를 탐색하는 가장 적절한 단일 질문을 JSON 객체로 생성하세요.
 """
+    # --- ---
 
-    # LLM 입력 메시지 생성 (시스템 프롬프트만 사용하거나, 필요시 이전 메시지 일부 포함)
-    # 이 노드는 주로 idea_summary를 기반으로 질문하므로, 간단히 시스템 프롬프트만 사용
+    # --- 4. LLM 호출 및 결과 처리 ---
     prompt_messages: List[BaseMessage] = [
         SystemMessage(content=system_prompt_text.strip())
     ]
-
-    # LLM 호출
     model_name_to_log = getattr(llm_questioner, 'model', getattr(llm_questioner, 'model_name', 'N/A'))
     print(f"AskMotivationWhy: LLM 호출 준비 (Model: {model_name_to_log}, Structured Output: MotivationQuestionOutput)")
 
     try:
         response_object: MotivationQuestionOutput = await structured_llm.ainvoke(prompt_messages)
         print(f"AskMotivationWhy: LLM 응답 수신 (구조화됨) - Question: {response_object.motivation_question[:50]}...")
-
-        # 생성된 질문을 사용자에게 전달할 메시지 내용으로 사용
         ai_question_content = response_object.motivation_question
+        error_message_to_return = None # 성공 시 오류 없음
 
     except Exception as e:
+        # LLM 호출 중 발생한 오류 처리
         error_msg = f"AskMotivationWhy: LLM 호출 오류 - {e}"
         print(error_msg)
         import traceback
         traceback.print_exc()
         # 오류 발생 시 사용자에게 보여줄 메시지 생성
-        ai_question_content = f"(시스템 오류: 동기 질문 생성에 실패했습니다. 아이디어에 대해 좀 더 자세히 설명해주시겠어요? - {e})"
-        # 상태에 오류 메시지 기록
-        return {
-             "error_message": error_msg,
-             "messages": [AIMessage(content=ai_question_content)] # 오류 메시지를 사용자에게 전달
-        }
+        ai_question_content = f"(시스템 오류: 동기 질문 생성에 실패했습니다. 아이디어에 대해 다시 말씀해주시겠어요? - {e})"
+        error_message_to_return = error_msg # 상태에 오류 기록
 
-    # 상태 업데이트 준비
+    # --- ---
+
+    # --- 5. 상태 업데이트 준비 및 반환 ---
     updates_to_state = {
-        # 생성된 AI 질문을 메시지 기록에 추가 (사용자에게 보여짐)
-        "messages": [AIMessage(content=ai_question_content)],
-        "error_message": None, # 성공 시 오류 없음
-        # 이 단계에서 특정 상태 플래그 업데이트 가능 (예: 'phase'를 'clarify_motivation'으로)
-        # "phase": "clarify_motivation", # WhyGraphState에 정의되어 있다고 가정
+        "messages": messages + [AIMessage(content=ai_question_content)],
+        "error_message": error_message_to_return,
     }
-    print(f"AskMotivationWhy: 상태 업데이트 반환 - AI Question 추가됨")
+
+    print(f"AskMotivationWhy: 상태 업데이트 반환 - AI Message 추가됨, Error: {error_message_to_return}")
+    # --- ---
 
     return updates_to_state
