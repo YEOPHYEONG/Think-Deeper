@@ -4,9 +4,10 @@ from typing import Optional, Dict, Any, List, Literal # Literal 추가
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver # 또는 DB 체크포인터
-
+from ..core.checkpointers import CombinedCheckpointer
+from ..db.session import get_db_session
 from ..core.config import get_settings
+
 # 상태 모델은 기존 GraphState 사용 (Why 흐름 관련 필드는 여기에 추가하거나, 별도 상태 관리 필요)
 from ..models.graph_state import GraphState
 # state_manager 임포트는 초기 정보 로드 외에는 불필요해질 수 있음
@@ -24,6 +25,13 @@ from ..graph_nodes.socratic import socratic_node
 # from ..graph_nodes.sidekick import sidekick_node # Sidekick 구현 시 주석 해제
 
 settings = get_settings()
+db = get_db_session()
+cp = CombinedCheckpointer(
+    db_session=db,
+    redis_url=settings.REDIS_URL,
+    ttl=settings.SESSION_TTL_SECONDS,
+)
+
 
 # --- LangGraph 엣지 정의 ---
 def should_continue(state: GraphState) -> str:
@@ -121,8 +129,15 @@ print("Edges defined.")
 
 # 그래프 컴파일
 print("Compiling Main Flow Graph...")
-checkpointer = MemorySaver() # TODO: DB 기반 체크포인터 고려
-app_graph = workflow.compile(checkpointer=checkpointer)
+
+db = get_db_session()
+# `CombinedCheckpointer` 는 core/checkpointers.py 에 정의된 클래스를 사용
+cp = CombinedCheckpointer(db_session=db,
+                          redis_url=settings.REDIS_URL,
+                          ttl=settings.SESSION_TTL_SECONDS)
+checkpointer = cp
+app_graph = workflow.compile(checkpointer=cp)
+
 print("Main Flow Graph compiled successfully.")
 
 

@@ -10,7 +10,10 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: Optional[str] = None
     GEMINI_API_KEY: Optional[str] = None
     
-    # --- 이 부분을 추가 ---
+    DATABASE_URL: Optional[str] = None
+    REDIS_URL: Optional[str] = None
+    SESSION_TTL_SECONDS: int = 3600
+
     # .env 파일을 읽도록 설정하고, 환경에 없는 변수는 무시합니다.
     model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
     # --- 여기까지 ---

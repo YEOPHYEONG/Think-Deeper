@@ -2,7 +2,9 @@
 
 from typing import List, Literal, Optional, Dict, Any
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver # 또는 다른 체크포인터
+from ..core.checkpointers import CombinedCheckpointer
+from ..db.session import get_db_session
+from ..core.config import get_settings
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage # 추가 임포트
 
 # --- 상태 모델 임포트 ---
@@ -17,6 +19,12 @@ from ..graph_nodes.why.ask_motivation_why_node import ask_motivation_why_node
 from ..graph_nodes.why.clarify_motivation_node import clarify_motivation_node
 from ..graph_nodes.why.identify_assumptions_node import identify_assumptions_node
 from ..graph_nodes.why.probe_assumption_node import probe_assumption_node
+
+settings = get_settings()
+db = get_db_session()
+cp = CombinedCheckpointer(db_session=db,
+                          redis_url=settings.REDIS_URL,
+                          ttl=settings.SESSION_TTL_SECONDS)
 
 # --- 조건부 라우팅 함수 정의 ---
 
@@ -92,9 +100,14 @@ print("Edges defined.")
 
 # 4. 그래프 컴파일
 print("Compiling Why Flow Graph...")
-# TODO: 실제 환경에서는 MemorySaver 대신 DB 체크포인터 사용 고려
-checkpointer = MemorySaver()
-app_why_graph = workflow.compile(checkpointer=checkpointer)
+db = get_db_session()
+# `CombinedCheckpointer` 는 core/checkpointers.py 에 정의된 클래스를 사용
+cp = CombinedCheckpointer(db_session=db,
+                          redis_url=settings.REDIS_URL,
+                          ttl=settings.SESSION_TTL_SECONDS)
+
+app_graph = workflow.compile(checkpointer=cp)
+
 print("Why Flow Graph compiled successfully.")
         
 # --- 5. 그래프 실행 함수 정의 (상세 구현) ---
