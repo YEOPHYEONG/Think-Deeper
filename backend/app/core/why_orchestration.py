@@ -22,9 +22,7 @@ from ..graph_nodes.why.probe_assumption_node import probe_assumption_node
 
 settings = get_settings()
 db = get_db_session()
-cp = CombinedCheckpointer(db_session=db,
-                          redis_url=settings.REDIS_URL,
-                          ttl=settings.SESSION_TTL_SECONDS)
+checkpointer = CombinedCheckpointer(db_session=db, redis_url=settings.REDIS_URL, ttl=settings.SESSION_TTL_SECONDS)
 
 # --- 조건부 라우팅 함수 정의 ---
 
@@ -106,7 +104,7 @@ cp = CombinedCheckpointer(db_session=db,
                           redis_url=settings.REDIS_URL,
                           ttl=settings.SESSION_TTL_SECONDS)
 
-app_graph = workflow.compile(checkpointer=cp)
+app_why_graph = workflow.compile(checkpointer=cp)
 
 print("Why Flow Graph compiled successfully.")
         

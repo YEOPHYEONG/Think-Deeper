@@ -5,6 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 # 나중에 API 라우터를 추가할 것입니다.
 from .api.v1.api import api_router_v1
 from .core.config import get_settings # 설정 로드 함수 임포트
+from .db.models import Base  # SQLAlchemy declarative_base
+from .db.session import engine
 
 # FastAPI 앱이 시작될 때 설정을 로드합니다.
 settings = get_settings()
@@ -15,6 +17,8 @@ app = FastAPI(
     version="0.1.0"
     # 필요한 경우 다른 FastAPI 설정 추가 가능
 )
+
+Base.metadata.create_all(bind=engine)
 
 app.add_middleware(
     CORSMiddleware,
