@@ -1,213 +1,149 @@
 # backend/app/core/checkpointers.py
 
 import pickle
-from sqlalchemy.orm import Session
-from redis import Redis
-from typing import NamedTuple
+import asyncio
+from typing import NamedTuple, Optional, Dict, Any, Iterator, AsyncIterator
 
-from ..db.models import GraphStateRecord
-import uuid
-from typing import Optional
-
-
-class SQLCheckpointer:
-    def __init__(self, db_session: Session):
-        self.db = db_session
-
-    def get(self, config):
-        tid = config["configurable"]["thread_id"]
-        return self.db.get(GraphStateRecord, tid)
-
-    def set(self, config, state):
-        tid = config["configurable"]["thread_id"]
-        rec = self.db.get(GraphStateRecord, tid)
-        if rec:
-            rec.state_json = state
-        else:
-            rec = GraphStateRecord(thread_id=tid, state_json=state)
-            self.db.add(rec)
-        self.db.commit()
-
-    def delete(self, config):
-        tid = config["configurable"]["thread_id"]
-        self.db.query(GraphStateRecord).filter_by(thread_id=tid).delete()
-        self.db.commit()
-
-class RedisCheckpointer:
-    def __init__(self, redis_url: str, ttl: int = 3600):
-        if redis_url:
-            self._redis = Redis.from_url(redis_url)
-        else:
-            self._redis = None
-        self._ttl = ttl
-
-    def _key(self, config):
-        return f"langgraph:state:{config['configurable']['thread_id']}"
-
-    def get(self, config):
-        if not self._redis:
-            return None
-        raw = self._redis.get(self._key(config))
-        return pickle.loads(raw) if raw else None
-
-    def set(self, config, state):
-        if not self._redis:
-            return
-        raw = pickle.dumps(state)
-        self._redis.set(self._key(config), raw, ex=self._ttl)
-
-    def delete(self, config):
-        if not self._redis:
-            return
-        self._redis.delete(self._key(config))
+from .sql_checkpointer import SQLCheckpointer
+from .redis_checkpointer import RedisCheckpointer
 
 class CheckpointTuple(NamedTuple):
     checkpoint: dict
     metadata: dict
-    parent_config: Optional[dict] = None
-    pending_writes: Optional[list] = None
-    id: Optional[str] = None
-    versions_seen: Optional[dict] = None
-    step: Optional[int] = 0
-    pending_sends: Optional[list] = []
-    version: Optional[str] = None
-    config: Optional[dict] = None   # ✅ 이 줄을 추가해줘야 한다!
-    
+    parent_config: Optional[dict]
+    pending_writes: Optional[Any]
+    id: Optional[str]
+    versions_seen: Optional[dict]
+    step: Optional[int]
+    pending_sends: Optional[Any]
+    version: Optional[str]
+    config: Optional[Dict[str, Any]]
+
 class CombinedCheckpointer:
-    def __init__(self, db_session: Session, redis_url: str = None, ttl: int = 3600):
-        self.sql_cp = SQLCheckpointer(db_session)
+    def __init__(
+        self,
+        db_session_factory,
+        redis_url: str,
+        ttl: int = 3600,
+    ):
+        self.sql_cp = SQLCheckpointer(db_session_factory)
         self.redis_cp = RedisCheckpointer(redis_url, ttl)
 
-    def _extract_state(self, record_or_dict):
-        if record_or_dict is None:
-            return None
-        if isinstance(record_or_dict, dict):
-            return record_or_dict
-        return record_or_dict.state_json
-
-    async def aget(self, config):
-        redis_state = self.redis_cp.get(config)
-        if redis_state:
-            return redis_state
-        sql_record = self.sql_cp.get(config)
-        state = self._extract_state(sql_record)
-        if state:
-            self.redis_cp.set(config, state)
+    # ----------------------
+    # 비동기 get (raw state dict 반환)
+    # ----------------------
+    async def aget(self, config: Dict[str, Any]) -> Optional[dict]:
+        """
+        LangGraph가 호출하는 async get: raw state dict 반환
+        """
+        state = self.redis_cp.get(config)
+        if state is None:
+            state = await self.sql_cp.aget(config)
         return state
 
-    async def aput(self, config, checkpoint, metadata, versions_seen):
-        """langgraph가 요구하는 비동기 put 메서드 (전체 상태 + 메타데이터 저장용)"""
-        # checkpoint dict 안에 메타데이터와 versions_seen을 저장해준다.
+    # ----------------------
+    # 비동기 get_tuple (CheckpointTuple 반환)
+    # ----------------------
+    async def aget_tuple(self, config: Dict[str, Any]) -> Optional[CheckpointTuple]:
+        raw = await self.aget(config)
+        if raw is None:
+            return None
+        metadata = raw.get("metadata", {})
+        versions_seen = raw.get("versions_seen")
+        if not isinstance(versions_seen, dict):
+            versions_seen = {}  # 강제 보정
+
+        return CheckpointTuple(
+            checkpoint=raw,
+            metadata=metadata,
+            parent_config=None,
+            pending_writes=None,
+            id=None,
+            versions_seen=versions_seen,
+            step=None,
+            pending_sends=None,
+            version=None,
+            config=config,
+        )
+    
+    # ----------------------
+    # 비동기 put
+    # ----------------------
+    async def aput(self, config: Dict[str, Any], checkpoint: dict, metadata: dict, versions_seen: dict) -> None:
         checkpoint["metadata"] = metadata
         checkpoint["versions_seen"] = versions_seen
-        self.set(config, checkpoint)
+        self.redis_cp.set(config, checkpoint)
+        await self.sql_cp.aset(config, checkpoint)
 
-    async def aput_writes(self, task_id, writes, config):
-        """langgraph가 요구하는 비동기 writes 적용"""
-        current = await self.aget(config)
-        if not current:
-            current = {
-                "id": str(uuid.uuid4()),
-                "channel_values": {},
-                "channel_versions": {},
-                "next": {},
-                "versions_seen": {},
-                "pending_sends": [],
-                "step": 0,
-            }
-        for key, value in writes:
-            if key == "step":
-                current["step"] = value
-            elif key == "pending_sends":
-                current["pending_sends"] = value
-            elif key == "next":
-                current["next"] = value
-            elif key == "channel_values":
-                current["channel_values"] = value
-            elif key == "channel_versions":
-                current["channel_versions"] = value
-            elif key == "versions_seen":
-                current["versions_seen"] = value
-            elif key == "messages":
-                current.setdefault("messages", []).extend(value)
-            else:
-                current[key] = value
+    # ----------------------
+    # 비동기 put_writes (no-op 또는 별도 저장)
+    # ----------------------
+    async def aput_writes(self, config: Dict[str, Any], writes: Any, task_id: str, task_path: str = "") -> None:
+        return None
 
-        self.set(config, current)
-
-    def get(self, config):
-        redis_state = self.redis_cp.get(config)
-        if redis_state:
-            return redis_state
-        sql_record = self.sql_cp.get(config)
-        state = self._extract_state(sql_record)
-        if state:
-            self.redis_cp.set(config, state)
-        return state
-
-    def set(self, config, state):
-        self.sql_cp.set(config, state)
-        self.redis_cp.set(config, state)
-
-    def delete(self, config):
-        self.sql_cp.delete(config)
+    # ----------------------
+    # 비동기 delete (단일 쓰레드)
+    # ----------------------
+    async def adelete(self, config: Dict[str, Any]) -> None:
         self.redis_cp.delete(config)
+        await self.sql_cp.adelete(config)
 
-    def get_next_version(self, max_version, channel_state):
+    async def adelete_thread(self, config: Dict[str, Any]) -> None:
+        """Alias for adelete"""
+        return await self.adelete(config)
+
+    # ----------------------
+    # 비동기 list
+    # ----------------------
+    async def alist(self, config: Dict[str, Any]) -> AsyncIterator[CheckpointTuple]:
+        for tup in self.list(config):
+            yield tup
+
+    # ----------------------
+    # 동기 get (raw state dict 반환)
+    # ----------------------
+    def get(self, config: Dict[str, Any]) -> Optional[dict]:
+        return asyncio.get_event_loop().run_until_complete(self.aget(config))
+
+    # ----------------------
+    # 동기 get_tuple
+    # ----------------------
+    def get_tuple(self, config: Dict[str, Any]) -> Optional[CheckpointTuple]:
+        return asyncio.get_event_loop().run_until_complete(self.aget_tuple(config))
+
+    # ----------------------
+    # 동기 put
+    # ----------------------
+    def put(self, config: Dict[str, Any], checkpoint: dict) -> None:
+        asyncio.get_event_loop().run_until_complete(
+            self.aput(config, checkpoint, checkpoint.get("metadata", {}), checkpoint.get("versions_seen", {}))
+        )
+
+    # ----------------------
+    # 동기 put_writes
+    # ----------------------
+    def put_writes(self, config: Dict[str, Any], writes: Any, task_id: str, task_path: str = "") -> None:
+        asyncio.get_event_loop().run_until_complete(
+            self.aput_writes(config, writes, task_id, task_path)
+        )
+
+    # ----------------------
+    # 동기 delete_thread
+    # ----------------------
+    def delete_thread(self, thread_id: str) -> None:
+        config = {"configurable": {"thread_id": thread_id}}
+        self.redis_cp.delete(config)
+        asyncio.get_event_loop().run_until_complete(self.sql_cp.adelete(config))
+
+    # ----------------------
+    # 동기 list
+    # ----------------------
+    def list(self, config: Dict[str, Any]) -> Iterator[CheckpointTuple]:
+        if tup := self.get_tuple(config):
+            yield tup
+
+    # ----------------------
+    # 다음 버전 생성 로직
+    # ----------------------
+    def get_next_version(self, max_version: Optional[int], channel_state: Any) -> int:
         return (max_version or 0) + 1
-
-    async def aget_tuple(self, config):
-        state = await self.aget(config)
-        if state is None:
-            state = {
-                "id": str(uuid.uuid4()),
-                "channel_values": {},
-                "channel_versions": {},
-                "next": {},
-                "versions_seen": {},
-                "pending_sends": [],
-                "step": 0,
-            }
-        elif "id" not in state:
-            state["id"] = str(uuid.uuid4())
-
-        return CheckpointTuple(
-            checkpoint=state,
-            version=None,
-            config=config,
-            parent_config=config,
-            metadata={"step": state["step"]},
-            pending_writes=[],
-            step=state["step"],
-            pending_sends=state["pending_sends"],
-            id=state["id"],
-            versions_seen=state["versions_seen"]
-        )
-
-    def get_tuple(self, config):
-        state = self.get(config)
-        if state is None:
-            state = {
-                "id": str(uuid.uuid4()),
-                "channel_values": {},
-                "channel_versions": {},
-                "next": {},
-                "versions_seen": {},
-                "pending_sends": [],
-                "step": 0,
-            }
-        elif "id" not in state:
-            state["id"] = str(uuid.uuid4())
-
-        return CheckpointTuple(
-            checkpoint=state,
-            version=None,
-            config=config,
-            parent_config=config,
-            metadata={"step": state["step"]},
-            pending_writes=[],
-            step=state["step"],
-            pending_sends=state["pending_sends"],
-            id=state["id"],
-            versions_seen=state["versions_seen"]
-        )

@@ -1,5 +1,3 @@
-# backend/app/core/config.py
-
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 from typing import Optional
@@ -24,3 +22,6 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     print("애플리케이션 설정 로딩...")
     return Settings()
+
+# ✅ 요거 추가
+settings = get_settings()

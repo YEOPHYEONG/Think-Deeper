@@ -1,30 +1,43 @@
 # backend/app/core/sql_checkpointer.py
-import json
-from sqlalchemy.orm import Session
-from langgraph.checkpoint.base import Checkpointer
-from ..db.models import GraphStateRecord  # thread_id, state_json
 
-class SQLCheckpointer(Checkpointer):
-    def __init__(self, db_session: Session):
-        self.db = db_session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from app.db.models import GraphStateRecord
 
-    def get(self, config: dict):
-        tid = config["configurable"]["thread_id"]
-        rec = self.db.query(GraphStateRecord).get(tid)
-        return rec.state_json if rec else None
+class SQLCheckpointer:
+    def __init__(self, db_session_factory):
+        # db_session_factory는 async_sessionmaker 또는 asynccontextmanager
+        self.db_session_factory = db_session_factory
 
-    def set(self, config: dict, state) -> None:
-        tid = config["configurable"]["thread_id"]
-        payload = state.values  # GraphState 또는 WhyGraphState.values
-        rec = self.db.query(GraphStateRecord).get(tid)
-        if rec:
-            rec.state_json = payload
-        else:
-            rec = GraphStateRecord(thread_id=tid, state_json=payload)
-            self.db.add(rec)
-        self.db.commit()
+    async def aget(self, config: dict):
+        session_id = config["configurable"]["thread_id"]
+        async with self.db_session_factory() as session:  # AsyncSession 팩토리 호출
+            result = await session.execute(
+                select(GraphStateRecord).where(GraphStateRecord.thread_id == session_id)
+            )
+            record = result.scalar_one_or_none()
+            return record.state_json if record else None
 
-    def delete(self, config: dict) -> None:
-        tid = config["configurable"]["thread_id"]
-        self.db.query(GraphStateRecord).filter_by(thread_id=tid).delete()
-        self.db.commit()
+    async def aset(self, config: dict, state: dict) -> None:
+        session_id = config["configurable"]["thread_id"]
+        async with self.db_session_factory() as session:
+            result = await session.execute(
+                select(GraphStateRecord).where(GraphStateRecord.thread_id == session_id)
+            )
+            record = result.scalar_one_or_none()
+            if record:
+                record.state_json = state
+            else:
+                session.add(GraphStateRecord(thread_id=session_id, state_json=state))
+            await session.commit()
+
+    async def adelete(self, config: dict) -> None:
+        session_id = config["configurable"]["thread_id"]
+        async with self.db_session_factory() as session:
+            result = await session.execute(
+                select(GraphStateRecord).where(GraphStateRecord.thread_id == session_id)
+            )
+            record = result.scalar_one_or_none()
+            if record:
+                await session.delete(record)
+                await session.commit()

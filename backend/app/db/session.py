@@ -1,19 +1,25 @@
-from sqlalchemy import create_engine
+# backend/app/db/session.py
+from app.core.config import settings
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
-from ..core.config import get_settings
-from .models import Base
+from contextlib import asynccontextmanager
 
-settings = get_settings()  # 인스턴스를 여기서 생성
+# Async 엔진
+engine = create_async_engine(settings.DATABASE_URL, future=True)
 
-# 테스트 환경에 DATABASE_URL이 없으면 메모리 SQLite를 사용
-engine = create_engine(
-    settings.DATABASE_URL or "sqlite:///:memory:",
-    future=True,
+# AsyncSession 공장
+async_session_factory = sessionmaker(
+    bind=engine,
+    class_=AsyncSession,
+    autoflush=False,
+    autocommit=False,
 )
 
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+# 편리한 컨텍스트매니저
+@asynccontextmanager
+async def get_db_session():
+    async with async_session_factory() as session:
+        yield session
 
-def get_db_session():
-    return SessionLocal()
-
-Base.metadata.create_all(bind=engine)
+# 별칭으로도 내보내기 (Async 세션 팩토리)
+get_db_session_async = get_db_session
