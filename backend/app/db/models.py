@@ -2,6 +2,7 @@
 
 from sqlalchemy import Column, Integer, String, Text, ForeignKey, TIMESTAMP, func
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.dialects.postgresql import JSON
 
 Base = declarative_base()
 
@@ -20,4 +21,4 @@ class GraphStateRecord(Base):
     __tablename__ = "graph_state_records"
 
     thread_id = Column(String, primary_key=True)
-    state_json = Column(Text, nullable=False)
+    state_json = Column(JSON, nullable=False)  # ✅ 수정된 부분
