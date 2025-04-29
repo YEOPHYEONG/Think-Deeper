@@ -5,12 +5,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ....core import state_manager
 from ....models.session import SessionCreateRequest, SessionCreateResponse
 from ....models.chat import Message
-from ....db.session import get_db_session
+from ....db.session import get_db_session, async_session_factory
 from ....core.redis_checkpointer import RedisCheckpointer
 from ....core.sql_checkpointer import SQLCheckpointer
 from ....core.checkpointers import CombinedCheckpointer
+from app.core.recovery_manager import restore_session_to_redis
 from typing import List
-
+from langchain_core.messages import HumanMessage, AIMessage
 from ....core.config import get_settings
 
 settings = get_settings()
@@ -27,7 +28,8 @@ router = APIRouter()
 async def create_session(request: SessionCreateRequest):
     """ 새로운 토론 세션 생성 """
     try:
-        session_id = state_manager.create_new_session(
+        # ✅ 비동기로 호출
+        session_id = await state_manager.create_new_session(
             topic=request.topic,
             initial_agent_type=request.initial_agent_type
         )
@@ -45,12 +47,13 @@ async def get_session_messages(session_id: str, db: AsyncSession = Depends(get_d
     """ 해당 세션의 메시지 기록을 LangGraph 체크포인터에서 조회하여 반환합니다. """
     print(f"세션 {session_id} 메시지 기록 요청")
 
-    redis_cp = RedisCheckpointer(settings.REDIS_URL, ttl=settings.SESSION_TTL_SECONDS)
-    sql_cp = SQLCheckpointer(db)
+    redis_cp = RedisCheckpointer(settings.REDIS_URL, ttl=settings.SESSION_TTL_SECONDS)  # ✅ 빠졌던 부분 추가
+    sql_cp = SQLCheckpointer(async_session_factory)
     checkpointer = CombinedCheckpointer(redis_cp, sql_cp)
 
+    config = {"configurable": {"thread_id": session_id}}  # ✅ 필수
     try:
-        current_state = await checkpointer.aget(session_id)
+        current_state = await checkpointer.aget(config)   # ✅ 문자열 넘기던 부분 제거
         if not current_state:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -58,10 +61,16 @@ async def get_session_messages(session_id: str, db: AsyncSession = Depends(get_d
             )
 
         messages_raw = current_state.get("messages", [])
-        messages = [
-            Message(role=msg.type if hasattr(msg, "type") else "assistant", content=msg.content)
-            for msg in messages_raw if isinstance(msg, (HumanMessage, AIMessage))
-        ]
+        messages = []
+        for msg in messages_raw:
+            if isinstance(msg, (HumanMessage, AIMessage)):
+                messages.append(
+                    Message(role=msg.type, content=msg.content)
+                )
+            elif isinstance(msg, dict):
+                messages.append(
+                    Message(role=msg.get("sender", "assistant"), content=msg.get("content", ""))
+                )
 
         return messages
 
@@ -72,3 +81,11 @@ async def get_session_messages(session_id: str, db: AsyncSession = Depends(get_d
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"메시지 기록 조회 중 오류 발생: {e}"
         )
+
+@router.post("/sessions/{session_id}/restore")
+async def restore_session(session_id: str):
+    success = await restore_session_to_redis(session_id)
+    if success:
+        return {"success": True, "message": "세션 복구 성공"}
+    else:
+        return {"success": False, "message": "세션 복구 실패"}

@@ -8,7 +8,9 @@ from app.core.redis_checkpointer import RedisCheckpointer
 from app.core.sql_checkpointer import SQLCheckpointer
 from app.core.checkpointers import CombinedCheckpointer
 from app.db.session import async_session_factory
+from app.db.session import get_db_session_async
 from app.core.config import get_settings
+from app.core.config import settings
 from app.models.why_graph_state import WhyGraphState
 
 from app.graph_nodes.why.understand_idea_node import understand_idea_node
@@ -65,12 +67,16 @@ async def run_why_exploration_turn(
     else:
         graph_input["messages"] = []
 
+    # ✅ 1. DB 세션을 하나만 사용
     async with async_session_factory() as session:
+        # ✅ 2. Redis + SQL checkpointer 생성 (정확하게)
         redis_cp = RedisCheckpointer(settings.REDIS_URL, ttl=settings.SESSION_TTL_SECONDS)
-        sql_cp = SQLCheckpointer(session)
+        sql_cp = SQLCheckpointer(async_session_factory)
         checkpointer = CombinedCheckpointer(redis_cp, sql_cp)
 
-        current_state_checkpoint = await checkpointer.aget(session_id)
+        # ✅ 3. Redis에 기존 상태가 없으면 초기 정보 넣기
+        config = {"configurable": {"thread_id": session_id}}
+        current_state_checkpoint = await checkpointer.aget(config)
         if not current_state_checkpoint:
             graph_input["session_id"] = session_id
             if initial_topic:
