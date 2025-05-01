@@ -26,8 +26,10 @@ class CombinedCheckpointer:
 
     async def aget(self, config: Dict[str, Any]) -> Optional[dict]:
         state = await self.redis_cp.aget(config)
+        print("[CHECKPOINTER] Redis 조회 결과:", state)
         if state is None:
             state = await self.sql_cp.aget(config)
+            print("[CHECKPOINTER] SQL 조회 결과:", state)
         return state
 
     async def aget_tuple(self, config: Dict[str, Any]) -> Optional[CheckpointTuple]:
@@ -52,8 +54,22 @@ class CombinedCheckpointer:
             config=config,
         )
 
-    async def aput(self, config: Dict[str, Any], checkpoint: dict, metadata: dict, versions_seen: dict) -> None:
+    async def aput(self, config, checkpoint, metadata, versions_seen):
+        print("[CHECKPOINTER] aput 호출됨")
+        print("  - config:", config)
+        print("  - keys:", list(checkpoint.keys()))
+        print("  - versions_seen:", versions_seen)
         checkpoint["metadata"] = metadata
+
+        if not isinstance(versions_seen, dict):
+            print(f"[경고] versions_seen 잘못된 형식 감지됨: {versions_seen} (타입: {type(versions_seen)})")
+            versions_seen = {}
+        else:
+            # 내부 값도 dict인지 검증
+            versions_seen = {
+                k: v if isinstance(v, dict) else {}  # 혹은 raise로 강제
+                for k, v in versions_seen.items()
+            }
         checkpoint["versions_seen"] = versions_seen
         await self.redis_cp.aset(config, checkpoint)
         await self.sql_cp.aset(config, checkpoint)
@@ -69,14 +85,15 @@ class CombinedCheckpointer:
         return await self.adelete(config)
 
     async def alist(self, config: Dict[str, Any]) -> AsyncIterator[CheckpointTuple]:
-        for tup in self.list(config):
-            yield tup
+            tup = await self.aget_tuple(config)
+            if tup:
+                yield tup
 
     def get(self, config: Dict[str, Any]) -> Optional[dict]:
         return asyncio.get_event_loop().run_until_complete(self.aget(config))
 
-    def get_tuple(self, config: Dict[str, Any]) -> Optional[CheckpointTuple]:
-        return asyncio.get_event_loop().run_until_complete(self.aget_tuple(config))
+#    def get_tuple(self, config: Dict[str, Any]) -> Optional[CheckpointTuple]:
+#        return asyncio.get_event_loop().run_until_complete(self.aget_tuple(config))
 
     def put(self, config: Dict[str, Any], checkpoint: dict) -> None:
         asyncio.get_event_loop().run_until_complete(
@@ -93,8 +110,9 @@ class CombinedCheckpointer:
         asyncio.get_event_loop().run_until_complete(self.redis_cp.adelete(config))
         asyncio.get_event_loop().run_until_complete(self.sql_cp.adelete(config))
 
-    def list(self, config: Dict[str, Any]) -> Iterator[CheckpointTuple]:
-        if tup := self.get_tuple(config):
+    async def list(self, config: Dict[str, Any]) -> AsyncIterator[CheckpointTuple]:
+        tup = await self.get_tuple(config)
+        if tup:
             yield tup
 
     def get_next_version(self, max_version: Optional[int], channel_state: Any) -> int:

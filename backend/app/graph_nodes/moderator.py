@@ -85,14 +85,12 @@ async def moderator_node(state: GraphState) -> Dict[str, Any]:
 
         # 4. 상태 업데이트 준비
         updates = {
-            "final_response": final_response_content, # API가 반환할 최종 응답
+            **state,
+            "final_response": final_response_content,
             "moderator_flags": [],
             "error_message": error_msg,
-             # Moderator 자체의 메시지는 필요시에만 추가
-             # "messages": [AIMessage(content=final_response_content)]
-             # 여기서는 마지막 에이전트의 메시지가 이미 messages에 추가되었으므로
-             # final_response만 설정하여 API가 반환하도록 함
         }
+
         print(f"Moderator: 상태 업데이트 반환 - FinalResponse 설정됨, Error: {error_msg}")
         return updates
 

@@ -3,7 +3,7 @@
 from typing import List, Optional, Dict, TypedDict, Annotated
 from langchain_core.messages import BaseMessage
 # Field와 default_factory를 사용하기 위해 pydantic_v1 임포트 (LangGraph 호환성)
-from langchain_core.pydantic_v1 import Field
+from pydantic import Field
 
 # 상태 모델 정의
 class WhyGraphState(TypedDict):

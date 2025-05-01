@@ -12,14 +12,19 @@ import {
   ApiError,
 } from "@/lib/api";
 import { ChatBubble, ChatRole } from "./ChatBubble";
+import CriticOutput from "./CriticOutput";
 
 export function TurnExchange({ sessionId }: { sessionId: string }) {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
+  const [criticOutput, setCriticOutput] = useState<null | {
+    critiquePoint: string;
+    briefElaboration: string;
+    requestSearchQuery?: string | null;
+  }>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  // 1) 세션 히스토리 로드
   useEffect(() => {
     const loadHistory = async () => {
       try {
@@ -42,13 +47,29 @@ export function TurnExchange({ sessionId }: { sessionId: string }) {
     setMessages((prev) => [...prev, userMsg]);
     setLoading(true);
     setInput("");
+    setCriticOutput(null); // 이전 비평 초기화
 
     try {
       const assistantMsg = await sendMessage(sessionId, input);
       setMessages((prev) => [...prev, assistantMsg]);
+
+      if ("last_critic_output" in assistantMsg) {
+        const criticData = (assistantMsg as any).last_critic_output;
+        if (
+          criticData &&
+          typeof criticData === "object" &&
+          "critique_point" in criticData &&
+          "brief_elaboration" in criticData
+        ) {
+          setCriticOutput({
+            critiquePoint: criticData.critique_point,
+            briefElaboration: criticData.brief_elaboration,
+            requestSearchQuery: criticData.request_search_query,
+          });
+        }
+      }
     } catch (e: unknown) {
       if (e instanceof ApiError) {
-        // HTTP 상태별 분기 가능
         if (e.status === 401) {
           setMessages((prev) => [
             ...prev,
@@ -77,10 +98,9 @@ export function TurnExchange({ sessionId }: { sessionId: string }) {
     }
   };
 
-  // 스크롤 맨 아래로
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, loading]);
+  }, [messages, loading, criticOutput]);
 
   return (
     <div className="relative flex flex-col h-full">
@@ -88,6 +108,15 @@ export function TurnExchange({ sessionId }: { sessionId: string }) {
         {messages.map((msg, idx) => (
           <ChatBubble key={idx} role={msg.role as ChatRole} content={msg.content} />
         ))}
+
+        {criticOutput && (
+          <CriticOutput
+            critiquePoint={criticOutput.critiquePoint}
+            briefElaboration={criticOutput.briefElaboration}
+            requestSearchQuery={criticOutput.requestSearchQuery}
+          />
+        )}
+
         {loading && <ChatBubble role="assistant" content="답변 작성 중..." />}
         <div ref={bottomRef} />
       </div>

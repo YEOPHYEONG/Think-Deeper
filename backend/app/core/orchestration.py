@@ -53,10 +53,9 @@ workflow.add_conditional_edges("moderator", lambda _: END, {END: END})
 # --- 그래프 컴파일 함수 ---
 async def compile_graph() -> StateGraph:
     redis_cp = RedisCheckpointer(settings.REDIS_URL, ttl=settings.SESSION_TTL_SECONDS)
-    async with async_session_factory() as db_session:
-        sql_cp = SQLCheckpointer(async_session_factory)
-        cp = CombinedCheckpointer(redis_cp, sql_cp)
-        return workflow.compile(checkpointer=cp)
+    sql_cp = SQLCheckpointer(async_session_factory)
+    cp = CombinedCheckpointer(redis_cp, sql_cp)
+    return workflow.compile(checkpointer=cp)
 
 # --- FastAPI 연동 함수 ---
 async def run_conversation_turn_langgraph(
@@ -81,32 +80,56 @@ async def run_conversation_turn_langgraph(
                 graph_input["target_agent"] = info.get("agent_type", "critic")
 
         try:
+            final_state = None
             async for ev in app_graph.astream_events(graph_input, config=config, version="v1"):
-                if ev.get("event") == "on_graph_end":
-                    final_state = app_graph.get_state(config=config)
-                    if final_state:
-                        memory_state = final_state.values.get("memory", {})
-                        messages = final_state.values.get("messages", [])
+                print(f"[그래프 이벤트] {ev}")
+                if ev.get("event") == "on_chain_end" and ev.get("name") == "LangGraph":
+                    output_dict = ev["data"]["output"]
+
+                    # ✅ dict인 값 중 가장 먼저 나오는 실제 상태(dict)를 final_state로 설정
+                    if isinstance(output_dict, dict):
+                        final_state = next(
+                            (v for v in output_dict.values() if isinstance(v, dict)),
+                            None
+                        )
+                    else:
+                        final_state = output_dict  # fallback (예외적 상황)
+
+                    print(f"[그래프 상태] final_state: {final_state}")
+
+                    if final_state and isinstance(final_state, dict):
+                        memory_state = final_state.get("memory", {})
+                        messages = final_state.get("messages", [])
                         try:
                             await flush_session_to_postgres(session_id, memory_state, messages)
                             await clear_flush_failed(session_id)
+                            print(f"[flush 성공] session_id={session_id}")
                         except Exception as flush_error:
                             print(f"[flush 실패] session_id={session_id}: {flush_error}")
                             await mark_flush_failed(session_id)
+                    else:
+                        print("[오류] final_state가 None이거나 dict가 아님")
+
                     break
 
-            final = app_graph.get_state(config=config)
-            if final is None or not hasattr(final, "values"):
+            if final_state is None:
                 return "(시스템 오류: 그래프 최종 상태를 가져올 수 없습니다.)"
 
-            vals = final.values
+            if not isinstance(final_state, dict):
+                print("[오류] 최종 상태 포맷이 dict 아님")
+                return "(시스템 오류: 그래프 최종 상태 형식이 올바르지 않습니다.)"
+
+            vals = final_state
             if vals.get("final_response"):
                 return vals["final_response"]
+
             msgs = vals.get("messages", [])
             if msgs and isinstance(msgs[-1], AIMessage):
                 return msgs[-1].content
 
             return "(응답 없음)"
+
         except Exception as e:
-            import traceback; traceback.print_exc()
-            return f"(오류: {e})"
+            import traceback
+            traceback.print_exc()
+            return f"(시스템 오류: {e})"

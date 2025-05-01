@@ -33,7 +33,7 @@ def get_llm_client(provider: str = "openai", model_name: str = "gpt-4o", tempera
         try:
             # 사용자가 제공한 OpenAI 모델명 사용 가능
             # 예: "gpt-4o", "gpt-4o-mini", "gpt-4-turbo" 등
-            return ChatOpenAI(model=model_name, api_key=settings.OPENAI_API_KEY, temperature=temperature)
+            return ChatOpenAI(model=model_name, api_key=settings.OPENAI_API_KEY, temperature=temperature, streaming=True)
         except Exception as e:
             print(f"OpenAI 클라이언트 ({model_name}) 생성 실패: {e}")
             raise

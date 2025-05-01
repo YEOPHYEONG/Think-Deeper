@@ -21,6 +21,8 @@ class SQLCheckpointer:
             return record.state_json if record else None
 
     async def aset(self, config: dict, state: dict) -> None:
+        print("[SQLCheckpointer] aset 호출됨")
+        print("  - thread_id:", config.get("configurable", {}).get("thread_id"))
         session_id = config["configurable"]["thread_id"]
 
         # 💡 LangChain 메시지 객체 등 JSON 직렬화가 안되는 항목을 문자열로 변환

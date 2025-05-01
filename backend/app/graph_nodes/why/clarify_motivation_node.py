@@ -2,7 +2,7 @@
 
 from typing import Dict, Any, List, Optional
 from langchain_core.messages import SystemMessage, BaseMessage, AIMessage, HumanMessage
-from langchain_core.pydantic_v1 import BaseModel, Field
+from pydantic import BaseModel, Field
 
 # LLM Provider 및 상태 모델 임포트
 from ...core.llm_provider import get_high_performance_llm # 심층 분석 및 질문 생성

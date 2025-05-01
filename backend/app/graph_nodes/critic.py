@@ -1,9 +1,11 @@
 # backend/app/graph_nodes/critic.py
 from typing import Dict, Any, List, Optional
 from langchain_core.messages import SystemMessage, BaseMessage, AIMessage, HumanMessage
-from langchain_core.pydantic_v1 import BaseModel, Field
+from pydantic import BaseModel, Field
 from ..core.llm_provider import get_high_performance_llm, get_fast_llm
 import re
+from langchain_core.runnables import RunnableWithMessageHistory
+from langchain_core.tools import tool
 
 from ..models.graph_state import GraphState, SearchResult
 

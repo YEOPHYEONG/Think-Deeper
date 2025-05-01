@@ -1,7 +1,7 @@
 # backend/app/graph_nodes/socratic.py
 from typing import Dict, Any, List, Optional
 from langchain_core.messages import SystemMessage, BaseMessage, AIMessage, HumanMessage
-from langchain_core.pydantic_v1 import BaseModel, Field # --- 구조화된 출력을 위해 추가 ---
+from pydantic import BaseModel, Field # --- 구조화된 출력을 위해 추가 ---
 
 # --- LLM Provider 및 상태 모델 임포트 ---
 # Socratic 질문은 때로 복잡한 맥락 이해가 필요할 수 있으므로 high_perf 사용 고려

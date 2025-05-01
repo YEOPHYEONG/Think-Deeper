@@ -3,6 +3,7 @@
 from app.db.models import GraphStateRecord, MessageRecord
 from app.db.session import get_db_session_async
 from app.core.session_store import r  # redis.from_url(...)
+from sqlalchemy import select
 
 async def flush_session_to_postgres(session_id: str, memory_state: dict, messages: list):
     """Redis MemorySaver 데이터를 PostgreSQL에 저장"""
@@ -36,6 +37,7 @@ async def flush_session_to_postgres(session_id: str, memory_state: dict, message
             db.add(message_record)
 
         await db.commit()
+        print(f"[flush 성공] session_id={session_id}")  # ✅ 커밋 후 위치가 맞음
 
 FAILED_FLUSH_KEY_PREFIX = "flush_failed:"
 

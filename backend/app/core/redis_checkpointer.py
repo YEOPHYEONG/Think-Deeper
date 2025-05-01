@@ -5,6 +5,7 @@ import json
 from typing import Optional, Dict, Any, List
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 from langchain_core.load import dumps
+import pickle
 
 SESSION_PREFIX = "session:"
 
@@ -25,17 +26,20 @@ def deserialize_messages(messages: List[Dict[str, Any]]) -> List[BaseMessage]:
 
 class RedisCheckpointer:
     def __init__(self, redis_url: str, ttl: int = 3600):
-        self._redis = Redis.from_url(redis_url)
+        self.client = Redis.from_url(redis_url, decode_responses=False)
         self.ttl = ttl
 
     def _key(self, config: Dict[str, Any]) -> str:
-        return SESSION_PREFIX + config["configurable"]["thread_id"]
+        ns = config.get("configurable", {}).get("checkpoint_ns", "") or "default"
+        thread_id = config.get("configurable", {}).get("thread_id", "")
+        checkpoint_id = config.get("configurable", {}).get("checkpoint_id", "") or "latest"
+        return f"checkpointer:{ns}:{thread_id}:{checkpoint_id}"
 
     async def aget(self, config: Dict[str, Any]) -> Optional[dict]:
-        raw = await self._redis.get(self._key(config))
+        raw = await self.client.get(self._key(config))
         if raw is None:
             return None
-        state = json.loads(raw)
+        state = pickle.loads(raw)
 
         # ❗ 메시지 복원 처리
         if "messages" in state and isinstance(state["messages"], list):
@@ -43,8 +47,15 @@ class RedisCheckpointer:
 
         return state
 
-    async def aset(self, config: Dict[str, Any], state: dict) -> None:
-        await self._redis.set(self._key(config), dumps(state), ex=self.ttl)
+    async def aset(self, config: Dict[str, Any], checkpoint: dict):
+        key = self._key(config)
+        print(f"[RedisCheckpointer] aset 호출됨")
+        print(f"  - thread_id: {config['configurable']['thread_id']}")
+        print(f"  - keys: {list(checkpoint.keys())}")  # <-- 여기가 에러났던 부분
+
+        # 실제 저장
+        data = pickle.dumps(checkpoint)
+        await self.client.set(key, data, ex=self.ttl)
 
 
     async def adelete(self, config: Dict[str, Any]) -> None:

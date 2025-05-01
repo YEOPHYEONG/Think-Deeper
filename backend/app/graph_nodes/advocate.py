@@ -1,7 +1,7 @@
 # backend/app/graph_nodes/advocate.py
 from typing import Dict, Any, List, Optional
 from langchain_core.messages import SystemMessage, BaseMessage, AIMessage, HumanMessage
-from langchain_core.pydantic_v1 import BaseModel, Field # --- 구조화된 출력을 위해 추가 ---
+from pydantic import BaseModel, Field # --- 구조화된 출력을 위해 추가 ---
 
 from ..core.llm_provider import get_high_performance_llm # Provider 함수 임포트
 from ..models.graph_state import GraphState # 상태 모델 임포트

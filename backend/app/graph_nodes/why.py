@@ -1,7 +1,7 @@
 # backend/app/graph_nodes/why.py
 from typing import Dict, Any, List, Optional
 from langchain_core.messages import SystemMessage, BaseMessage, AIMessage, HumanMessage
-from langchain_core.pydantic_v1 import BaseModel, Field # --- 구조화된 출력을 위해 추가 ---
+from pydantic import BaseModel, Field # --- 구조화된 출력을 위해 추가 ---
 
 # --- LLM Provider 및 상태 모델 임포트 ---
 from ..core.llm_provider import get_high_performance_llm # Why 에이전트는 분석적이므로 고성능 모델 고려
