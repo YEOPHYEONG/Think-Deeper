@@ -1,16 +1,14 @@
 # backend/app/core/why_orchestration.py
 
 from typing import List, Optional, Dict, Any
-from langgraph.graph import StateGraph, END
+from langgraph.graph import StateGraph, END, PAUSE
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 
 from app.core.redis_checkpointer import RedisCheckpointer
 from app.core.sql_checkpointer import SQLCheckpointer
 from app.core.checkpointers import CombinedCheckpointer
 from app.db.session import async_session_factory
-from app.db.session import get_db_session_async
 from app.core.config import get_settings
-from app.core.config import settings
 from app.models.why_graph_state import WhyGraphState
 
 from app.graph_nodes.why.understand_idea_node import understand_idea_node
@@ -19,12 +17,21 @@ from app.graph_nodes.why.clarify_motivation_node import clarify_motivation_node
 from app.graph_nodes.why.identify_assumptions_node import identify_assumptions_node
 from app.graph_nodes.why.probe_assumption_node import probe_assumption_node
 
+
+# --- 설정 로딩 ---
 settings = get_settings()
+
+# --- Checkpointer (모듈 전체에서 공유 가능) ---
+redis_cp = RedisCheckpointer(settings.REDIS_URL, ttl=settings.SESSION_TTL_SECONDS)
+sql_cp = SQLCheckpointer(async_session_factory)
+checkpointer = CombinedCheckpointer(redis_cp, sql_cp)
 
 # --- LangGraph Workflow 구성 ---
 
 def route_after_clarification(state: WhyGraphState) -> str:
-    return "identify_assumptions" if state.get("motivation_clear", False) else "clarify_motivation"
+    if not state.get("motivation_clear", False):
+        return PAUSE  # 사용자 입력 대기
+    return "identify_assumptions"
 
 def route_after_probing(state: WhyGraphState) -> str:
     return END if state.get("assumptions_fully_probed", False) else "probe_assumption"
@@ -37,7 +44,6 @@ workflow.add_node("identify_assumptions", identify_assumptions_node)
 workflow.add_node("probe_assumption", probe_assumption_node)
 
 workflow.set_entry_point("understand_idea")
-
 workflow.add_edge("understand_idea", "ask_motivation")
 workflow.add_edge("ask_motivation", "clarify_motivation")
 workflow.add_conditional_edges("clarify_motivation", route_after_clarification, {
@@ -50,7 +56,8 @@ workflow.add_conditional_edges("probe_assumption", route_after_probing, {
     "probe_assumption": "probe_assumption",
 })
 
-app_why_graph = workflow.compile()
+# ✅ checkpointer는 compile 시점에만 주입
+app_why_graph = workflow.compile(checkpointer=checkpointer)
 
 # --- 그래프 실행 함수 ---
 
@@ -67,42 +74,35 @@ async def run_why_exploration_turn(
     else:
         graph_input["messages"] = []
 
-    # ✅ 1. DB 세션을 하나만 사용
-    async with async_session_factory() as session:
-        # ✅ 2. Redis + SQL checkpointer 생성 (정확하게)
-        redis_cp = RedisCheckpointer(settings.REDIS_URL, ttl=settings.SESSION_TTL_SECONDS)
-        sql_cp = SQLCheckpointer(async_session_factory)
-        checkpointer = CombinedCheckpointer(redis_cp, sql_cp)
+    # ✅ 상태 미존재 시 초기 topic 전달
+    current_state_checkpoint = await checkpointer.aget(config)
+    if not current_state_checkpoint:
+        graph_input["session_id"] = session_id
+        if initial_topic:
+            graph_input["initial_topic"] = initial_topic
 
-        # ✅ 3. Redis에 기존 상태가 없으면 초기 정보 넣기
-        config = {"configurable": {"thread_id": session_id}}
-        current_state_checkpoint = await checkpointer.aget(config)
-        if not current_state_checkpoint:
-            graph_input["session_id"] = session_id
-            if initial_topic:
-                graph_input["initial_topic"] = initial_topic
+    try:
+        # ❌ checkpointer는 이미 compile 시점에 주입되었으므로 제거
+        async for event in app_why_graph.astream_events(graph_input, config=config):
+            if event["event"] == "on_graph_end":
+                break
 
-        try:
-            async for event in app_why_graph.astream_events(graph_input, config=config, checkpointer=checkpointer):
-                if event["event"] == "on_graph_end":
-                    break
+        final_state = app_why_graph.get_state(config=config)
+        if final_state is None or not hasattr(final_state, "values"):
+            return "(시스템 오류: Why 그래프 최종 상태를 가져올 수 없습니다.)"
 
-            final_state = app_why_graph.get_state(config=config)
-            if final_state is None or not hasattr(final_state, "values"):
-                return "(시스템 오류: Why 그래프 최종 상태를 가져올 수 없습니다.)"
+        final_values = final_state.values
 
-            final_values = final_state.values
-
-            if final_values.get("assumptions_fully_probed"):
-                return "모든 주요 가정을 살펴본 것 같습니다. 도움이 되었기를 바랍니다."
+        if final_values.get("assumptions_fully_probed"):
+            return "모든 주요 가정을 살펴본 것 같습니다. 도움이 되었기를 바랍니다."
+        else:
+            messages: List[BaseMessage] = final_values.get("messages", [])
+            if messages and isinstance(messages[-1], AIMessage):
+                return messages[-1].content
             else:
-                messages: List[BaseMessage] = final_values.get("messages", [])
-                if messages and isinstance(messages[-1], AIMessage):
-                    return messages[-1].content
-                else:
-                    error_msg = final_values.get("error_message", "알 수 없는 오류")
-                    return f"오류: {error_msg}"
+                error_msg = final_values.get("error_message", "알 수 없는 오류")
+                return f"오류: {error_msg}"
 
-        except Exception as e:
-            import traceback; traceback.print_exc()
-            return f"오류: Why 흐름 처리 중 예외 발생 - {e}"
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return f"오류: Why 흐름 처리 중 예외 발생 - {e}"

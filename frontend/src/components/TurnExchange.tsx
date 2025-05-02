@@ -7,6 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import {
   sendMessage,
+  sendWhyMessage,
   fetchSessionMessages,
   Message,
   ApiError,
@@ -14,7 +15,12 @@ import {
 import { ChatBubble, ChatRole } from "./ChatBubble";
 import CriticOutput from "./CriticOutput";
 
-export function TurnExchange({ sessionId }: { sessionId: string }) {
+interface TurnExchangeProps {
+  sessionId: string;
+  agentType?: string; // optional로 변경 (URL param이 없을 수 있음)
+}
+
+export function TurnExchange({ sessionId, agentType }: TurnExchangeProps) {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
@@ -47,27 +53,35 @@ export function TurnExchange({ sessionId }: { sessionId: string }) {
     setMessages((prev) => [...prev, userMsg]);
     setLoading(true);
     setInput("");
-    setCriticOutput(null); // 이전 비평 초기화
+    setCriticOutput(null);
 
     try {
-      const assistantMsg = await sendMessage(sessionId, input);
-      setMessages((prev) => [...prev, assistantMsg]);
+      let assistantMsg: Message;
 
-      if ("last_critic_output" in assistantMsg) {
-        const criticData = (assistantMsg as any).last_critic_output;
-        if (
-          criticData &&
-          typeof criticData === "object" &&
-          "critique_point" in criticData &&
-          "brief_elaboration" in criticData
-        ) {
-          setCriticOutput({
-            critiquePoint: criticData.critique_point,
-            briefElaboration: criticData.brief_elaboration,
-            requestSearchQuery: criticData.request_search_query,
-          });
+      if (agentType === "why") {
+        assistantMsg = await sendWhyMessage(sessionId, input);
+      } else {
+        assistantMsg = await sendMessage(sessionId, input);
+
+        // 🎯 Critic용 분석 결과 처리
+        if ("last_critic_output" in assistantMsg) {
+          const criticData = (assistantMsg as any).last_critic_output;
+          if (
+            criticData &&
+            typeof criticData === "object" &&
+            "critique_point" in criticData &&
+            "brief_elaboration" in criticData
+          ) {
+            setCriticOutput({
+              critiquePoint: criticData.critique_point,
+              briefElaboration: criticData.brief_elaboration,
+              requestSearchQuery: criticData.request_search_query,
+            });
+          }
         }
       }
+
+      setMessages((prev) => [...prev, assistantMsg]);
     } catch (e: unknown) {
       if (e instanceof ApiError) {
         if (e.status === 401) {
@@ -109,7 +123,7 @@ export function TurnExchange({ sessionId }: { sessionId: string }) {
           <ChatBubble key={idx} role={msg.role as ChatRole} content={msg.content} />
         ))}
 
-        {criticOutput && (
+        {agentType !== "why" && criticOutput && (
           <CriticOutput
             critiquePoint={criticOutput.critiquePoint}
             briefElaboration={criticOutput.briefElaboration}

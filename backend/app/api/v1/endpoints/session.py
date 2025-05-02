@@ -1,6 +1,7 @@
 # backend/app/api/v1/endpoints/session.py
 
 from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from ....core import state_manager
 from ....models.session import SessionCreateRequest, SessionCreateResponse
@@ -9,10 +10,13 @@ from ....db.session import get_db_session, async_session_factory
 from ....core.redis_checkpointer import RedisCheckpointer
 from ....core.sql_checkpointer import SQLCheckpointer
 from ....core.checkpointers import CombinedCheckpointer
+from app.core.why_orchestration import run_why_exploration_turn
 from app.core.recovery_manager import restore_session_to_redis
 from typing import List
 from langchain_core.messages import HumanMessage, AIMessage
 from ....core.config import get_settings
+from pydantic import BaseModel
+from typing import Optional
 
 settings = get_settings()
 
@@ -89,3 +93,15 @@ async def restore_session(session_id: str):
         return {"success": True, "message": "세션 복구 성공"}
     else:
         return {"success": False, "message": "세션 복구 실패"}
+
+class WhyTurnRequest(BaseModel):
+    input: Optional[str] = None
+
+@router.post("/sessions/{session_id}/why", tags=["Why Agent"])
+async def run_why_turn(session_id: str, req: WhyTurnRequest = Body(...)):
+    """ Why agent를 통한 탐색 수행 """
+    response = await run_why_exploration_turn(
+        session_id=session_id,
+        user_input=req.input
+    )
+    return {"response": response}

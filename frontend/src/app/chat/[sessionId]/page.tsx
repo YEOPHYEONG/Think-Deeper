@@ -53,7 +53,7 @@ export default function ChatPage({
       {/* --- 채팅창 영역: 남은 공간 모두 차지 --- */}
       {/* 헤더가 있으면 상단 모서리 둥글게 처리 제거, 하단만 유지 */}
       <div className={`flex-1 flex flex-col bg-slate-900 overflow-hidden ${ (topic || agentType !== 'default') ? 'rounded-b-xl' : 'rounded-xl'}`}>
-        <TurnExchange sessionId={sessionId} />
+        <TurnExchange sessionId={sessionId} agentType={agentType} />
       </div>
       {/* --- --- */}
     </div>

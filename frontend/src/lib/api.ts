@@ -110,3 +110,21 @@ export async function fetchSessionMessages(
     method: "GET",
   });
 }
+
+/**
+ * Why 모드에서 사용자 메시지 전송
+ */
+export async function sendWhyMessage(
+  sessionId: string,
+  content?: string
+): Promise<Message> {
+  const data = await request<{ response: string }>(
+    `/sessions/${sessionId}/why`,
+    {
+      method: "POST",
+      body: { input: content ?? "" },
+      timeoutMs: 120000,
+    }
+  );
+  return { role: "assistant", content: data.response };
+}

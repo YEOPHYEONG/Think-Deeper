@@ -13,3 +13,5 @@ dist/
 # macOS / VS Code
 .DS_Store
 .vscode/
+
+redis.windows.conf
