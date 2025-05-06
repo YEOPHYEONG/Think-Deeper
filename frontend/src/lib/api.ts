@@ -118,7 +118,7 @@ export async function sendWhyMessage(
   sessionId: string,
   content?: string
 ): Promise<Message> {
-  const data = await request<{ response: string }>(
+  const data = await request<{ content?: string }>(
     `/sessions/${sessionId}/why`,
     {
       method: "POST",
@@ -126,5 +126,12 @@ export async function sendWhyMessage(
       timeoutMs: 120000,
     }
   );
-  return { role: "assistant", content: data.response };
+
+  // fallback 처리
+  const assistantContent =
+    typeof data.content === "string" && data.content.trim() !== ""
+      ? data.content
+      : "❌ 시스템 오류: 응답 내용을 불러오지 못했습니다.";
+
+  return { role: "assistant", content: assistantContent };
 }

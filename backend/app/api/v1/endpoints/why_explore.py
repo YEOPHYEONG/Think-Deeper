@@ -4,10 +4,12 @@ from fastapi import APIRouter, HTTPException, status, Path, Body
 from pydantic import BaseModel, Field
 from typing import Optional, Set
 
+
 # Why 흐름 오케스트레이션 실행 함수 및 상태 모델 임포트
 from ....core.why_orchestration import run_why_exploration_turn, app_why_graph
 from ....models.chat import MessageResponse
 from langchain_core.messages import AIMessage
+from langgraph.errors import GraphInterrupt
 
 router = APIRouter()
 
@@ -55,7 +57,11 @@ async def start_or_continue_why_exploration(
                 if isinstance(m, AIMessage):
                     first_ai = m.content
                     break
-            ai_response_content = first_ai or '(질문 생성에 오류가 발생했습니다.)'
+            if not first_ai:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="첫 AI 질문을 가져오지 못했습니다. 아이디어를 다시 입력해 주세요."
+                )
         else:
             # 이후 호출: 다음 질문 또는 결과 반환
             ai_response_content = await run_why_exploration_turn(
@@ -76,10 +82,6 @@ async def start_or_continue_why_exploration(
 
     except HTTPException:
         raise
-    except Exception as e:
-        print(f"API 오류: /explore-why 처리 실패 (Session: {session_id}) - {e}")
-        import traceback; traceback.print_exc()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Why 탐색 처리에 실패했습니다: {e}"
-        )
+    except GraphInterrupt as gi:
+        print(f"GraphInterrupt 발생 - 사용자 입력 요구됨 (Session: {session_id})")
+        return MessageResponse(content=str(gi.value))  # 혹은 gi.args[0]

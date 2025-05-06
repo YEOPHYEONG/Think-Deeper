@@ -2,7 +2,9 @@
 
 from sqlalchemy import Column, Integer, String, Text, ForeignKey, TIMESTAMP, func
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.dialects.postgresql import JSON
+from sqlalchemy.dialects.postgresql import JSON, UUID, JSONB
+from datetime import datetime
+import uuid
 
 Base = declarative_base()
 
@@ -22,3 +24,17 @@ class GraphStateRecord(Base):
 
     thread_id = Column(String, primary_key=True)
     state_json = Column(JSON, nullable=False)  # ✅ 수정된 부분
+
+class SessionStateRecord(Base):
+    __tablename__ = "session_state"
+    session_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    state = Column(JSONB, nullable=False)
+    updated_at = Column(TIMESTAMP, nullable=False, default=datetime.utcnow, server_default="NOW()")
+
+class SessionTranscriptRecord(Base):
+    __tablename__ = "session_transcript"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("session_state.session_id"), nullable=False)
+    occurred_at = Column(TIMESTAMP, nullable=False, default=datetime.utcnow, server_default="NOW()")
+    role = Column(Text, nullable=False)
+    content = Column(Text, nullable=False)

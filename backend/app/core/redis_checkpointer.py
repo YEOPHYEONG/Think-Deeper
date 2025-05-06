@@ -69,3 +69,4 @@ class RedisCheckpointer:
 
     def delete(self, config: Dict[str, Any]) -> None:
         raise NotImplementedError("동기 delete은 테스트 용도로만 구현 필요")
+

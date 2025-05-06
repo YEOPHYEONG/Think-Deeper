@@ -17,6 +17,8 @@ from langchain_core.messages import HumanMessage, AIMessage
 from ....core.config import get_settings
 from pydantic import BaseModel
 from typing import Optional
+from ....models.chat import MessageResponse
+from langgraph.errors import GraphInterrupt
 
 settings = get_settings()
 
@@ -48,33 +50,33 @@ async def create_session(request: SessionCreateRequest):
 
 @router.get("/sessions/{session_id}/messages", response_model=List[Message], tags=["Session Management"])
 async def get_session_messages(session_id: str, db: AsyncSession = Depends(get_db_session)):
-    """ 해당 세션의 메시지 기록을 LangGraph 체크포인터에서 조회하여 반환합니다. """
     print(f"세션 {session_id} 메시지 기록 요청")
 
-    redis_cp = RedisCheckpointer(settings.REDIS_URL, ttl=settings.SESSION_TTL_SECONDS)  # ✅ 빠졌던 부분 추가
+    redis_cp = RedisCheckpointer(settings.REDIS_URL, ttl=settings.SESSION_TTL_SECONDS)
     sql_cp = SQLCheckpointer(async_session_factory)
     checkpointer = CombinedCheckpointer(redis_cp, sql_cp)
 
-    config = {"configurable": {"thread_id": session_id}}  # ✅ 필수
+    config = {"configurable": {"thread_id": session_id}}
+
     try:
-        current_state = await checkpointer.aget(config)   # ✅ 문자열 넘기던 부분 제거
-        if not current_state:
+        # ✅ 사용자용 메시지만 따로 추출
+        messages_raw = await checkpointer.aget_user_visible_messages(config)
+        if not messages_raw:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"세션 {session_id}에 대한 기록을 찾을 수 없습니다."
+                detail=f"세션 {session_id}에 대한 메시지 기록을 찾을 수 없습니다."
             )
 
-        messages_raw = current_state.get("messages", [])
+        # ✅ 프론트 출력용으로 가공
         messages = []
         for msg in messages_raw:
-            if isinstance(msg, (HumanMessage, AIMessage)):
-                messages.append(
-                    Message(role=msg.type, content=msg.content)
-                )
-            elif isinstance(msg, dict):
-                messages.append(
-                    Message(role=msg.get("sender", "assistant"), content=msg.get("content", ""))
-                )
+            try:
+                if isinstance(msg, (HumanMessage, AIMessage)):
+                    messages.append(Message(role=msg.type, content=msg.content))
+                elif isinstance(msg, dict):
+                    messages.append(Message(role=msg.get("sender", "assistant"), content=msg.get("content", "")))
+            except Exception as e:
+                print("⚠️ 메시지 처리 중 오류:", e, msg)
 
         return messages
 
@@ -97,11 +99,28 @@ async def restore_session(session_id: str):
 class WhyTurnRequest(BaseModel):
     input: Optional[str] = None
 
-@router.post("/sessions/{session_id}/why", tags=["Why Agent"])
+@router.post("/sessions/{session_id}/why", response_model=MessageResponse, tags=["Why Agent"])
 async def run_why_turn(session_id: str, req: WhyTurnRequest = Body(...)):
+    print(f"[DEBUG][why endpoint] session_id={session_id!r}, req.input={req.input!r}")
     """ Why agent를 통한 탐색 수행 """
-    response = await run_why_exploration_turn(
-        session_id=session_id,
-        user_input=req.input
-    )
-    return {"response": response}
+    try:
+        # 최초 호출 시에는 initial_topic도 함께 넘겨줘서 raw_topic/raw_idea를 설정하게 함
+        response = await run_why_exploration_turn(
+            session_id=session_id,
+            user_input=req.input,
+            initial_topic=req.input
+        )
+        return MessageResponse(content=response)
+
+    except GraphInterrupt as gi:
+        # ✅ 사용자 질문용 인터럽트 발생 시 → 질문 텍스트를 반환
+        print(f"GraphInterrupt 발생: {gi.value}")
+        return MessageResponse(content=str(gi.value))
+
+    except Exception as e:
+        print(f"Why 흐름 처리 중 오류: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Why 흐름 중 예외 발생: {e}"
+        )
+

@@ -2,6 +2,8 @@
 
 from typing import Dict, Any, List, Optional
 from langchain_core.messages import SystemMessage, BaseMessage, AIMessage, HumanMessage
+from langgraph.types import interrupt
+from langgraph.errors import GraphInterrupt
 from pydantic import BaseModel, Field
 
 # LLM Provider 및 상태 모델 임포트
@@ -20,6 +22,10 @@ async def clarify_motivation_node(state: WhyGraphState) -> Dict[str, Any]:
     Clarify Motivation 노드: 사용자의 동기 답변을 분석하여 명확성을 판단하고,
     불명확하면 추가 질문을 생성하거나, 명확하면 동기 요약을 상태에 저장합니다.
     """
+    # 0. 이미 동기가 명확해졌다면 즉시 종료 (다음 노드로 넘어감)
+    if state.get("motivation_cleared", False):
+        return {}
+
     print("--- Clarify Motivation Node 실행 ---")
 
     # LLM 클라이언트 가져오기
@@ -30,23 +36,19 @@ async def clarify_motivation_node(state: WhyGraphState) -> Dict[str, Any]:
         print(f"ClarifyMotivation: LLM 클라이언트 로드 실패 - {e}")
         return {"error_message": f"LLM 클라이언트 로드 실패: {e}"}
 
-    # 상태 정보 읽기 (무조건 LLM 호출하도록 단순화)
-    messages = state.get("messages", [])
+    # 상태 정보 읽기
+    dialogue_history: List[Dict[str,str]] = state.get("dialogue_history", [])
     idea_summary = state.get("idea_summary")
 
-    # 이전 AI 질문과 사용자 답변을 가장 최근 것으로 선택
-    ai_question_context = None
-    for msg in reversed(messages):
-        if isinstance(msg, AIMessage):
-            ai_question_context = msg.content
-            break
-    user_answer = None
-    for msg in reversed(messages):
-        if isinstance(msg, HumanMessage):
-            user_answer = msg.content
-            break
-    ai_question_context = ai_question_context or "이전 질문 없음"
-    user_answer = user_answer or ""
+    # dialogue_history에서 최근 Assistant/User 발화 추출
+    ai_question_context = next(
+        (turn["content"] for turn in reversed(dialogue_history) if turn["role"]=="assistant"),
+        "이전 질문 없음"
+    )
+    user_answer = next(
+        (turn["content"] for turn in reversed(dialogue_history) if turn["role"]=="user"),
+        ""
+    )
 
 
     # 시스템 프롬프트 구성
@@ -84,39 +86,26 @@ async def clarify_motivation_node(state: WhyGraphState) -> Dict[str, Any]:
     try:
         response_object: MotivationClarityOutput = await structured_llm.ainvoke(prompt_messages)
         print(f"ClarifyMotivation: LLM 응답 수신 (구조화됨) - Is Clear: {response_object.is_motivation_clear}")
-
-        ai_message_content: Optional[str] = None
-        updates_to_state: Dict[str, Any] = { "error_message": None }
-
-        if response_object.is_motivation_clear:
-            # 동기가 명확 -> 상태 업데이트 (다음 단계로 넘어갈 준비)
-            updates_to_state["motivation_clear"] = True # 상태 모델에 이 필드가 있다고 가정
-            updates_to_state["final_motivation_summary"] = response_object.summary_of_motivation # 상태 모델에 저장
-            print(f"ClarifyMotivation: 동기 명확함. 요약: {response_object.summary_of_motivation}")
-            # 이 경우 사용자에게 추가 질문을 보내지 않음
-        else:
-            # 동기가 불명확 -> 추가 질문 생성 및 메시지에 추가
-            updates_to_state["motivation_clear"] = False
-            if response_object.clarification_question:
-                ai_message_content = response_object.clarification_question
-                updates_to_state["messages"] = [AIMessage(content=ai_message_content)]
-                print(f"ClarifyMotivation: 동기 불명확. 추가 질문 생성: {ai_message_content[:50]}...")
-            else:
-                # LLM이 질문 생성에 실패한 경우 처리
-                print("ClarifyMotivation: 동기 불명확 판단했으나 추가 질문 생성 실패.")
-                updates_to_state["error_message"] = "동기 명확화 질문 생성 실패"
-                updates_to_state["messages"] = [AIMessage(content="(시스템 오류: 동기 명확화 질문 생성 실패. 다시 답변해주시겠어요?)")]
-
-    except Exception as e:
-        error_msg = f"ClarifyMotivation: LLM 호출 오류 - {e}"
-        print(error_msg)
-        import traceback
-        traceback.print_exc()
-        updates_to_state = {
-             "error_message": error_msg,
-             "messages": [AIMessage(content=f"(시스템 오류: 동기 명확화 처리 실패 - {e})")]
+        if not response_object.is_motivation_clear:
+            # 동기 불명확 → 후속 질문만 리턴
+            raise interrupt(response_object.clarification_question).with_data({
+                "is_motivation_clear": False,
+                "clarification_question": response_object.clarification_question,
+            })
+        # 명확한 경우 → 다음 노드로 넘어갈 수 있도록 summary 만 저장
+        return {
+            "is_motivation_clear": True,
+            "summary_of_motivation": response_object.summary_of_motivation,
         }
 
-    # 상태 업데이트 반환
-    print(f"ClarifyMotivation: 상태 업데이트 반환 - { {k: v for k, v in updates_to_state.items() if k != 'messages'} }")
-    return updates_to_state
+    except GraphInterrupt:
+        raise  # LangGraph 내부에서 처리하라고 넘김
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise interrupt(
+            f"(시스템 오류: 명확성 판단 중 예외 발생 - {e})"
+        ).with_data({
+            "messages": messages + [AIMessage(content=f"(시스템 오류: 명확성 판단 실패 - {e})")],
+            "motivation_clear": False,
+            "error_message": str(e)
+        })

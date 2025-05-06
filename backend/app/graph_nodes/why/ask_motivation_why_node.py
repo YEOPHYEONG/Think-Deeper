@@ -2,6 +2,7 @@
 
 from typing import Dict, Any, List, Optional
 from langchain_core.messages import SystemMessage, BaseMessage, AIMessage, HumanMessage
+from langgraph.types import interrupt
 from pydantic import BaseModel, Field
 
 # LLM Provider 및 상태 모델 임포트
@@ -61,7 +62,7 @@ async def ask_motivation_why_node(state: WhyGraphState) -> Dict[str, Any]:
     # 이제 idea_summary가 존재함이 보장됨
     system_prompt_text = f"""
 # 역할: 당신은 사용자의 아이디어나 생각 이면에 있는 **근본적인 동기, 목적, 또는 추구하는 가치('Why')**를 탐색하도록 돕는 AI 질문자입니다. 당신의 목표는 사용자가 제시한 아이디어 요약을 바탕으로, 그 아이디어를 추진하게 만드는 **가장 핵심적인 이유**에 대해 성찰하도록 유도하는 **단 하나의 통찰력 있는 개방형 질문**을 던지는 것입니다. (참고: 골든 서클 - Why -> How -> What)
-
+#단, 근본적인 동기, 목적은 개인이 성취하고자하는 목적보다 그 아이디어가 구체화되어 해결할 문제, 혹은 가치에 집중해야합니다.
 # 입력 정보:
 * **사용자 아이디어 요약:** {idea_summary}
 
@@ -71,43 +72,33 @@ async def ask_motivation_why_node(state: WhyGraphState) -> Dict[str, Any]:
 3.  **호기심과 존중:** 진심으로 궁금하다는 듯, 사용자의 아이디어를 존중하는 어조를 유지하세요.
 4.  **단일 질문:** **가장 중요하다고 생각되는 단 하나의 동기 질문**만 생성하세요.
 5.  **구조화된 출력:** 반드시 지정된 JSON 형식(`{{"motivation_question": "..."}}`)으로 질문을 출력하세요.
+6.  
 
 # 출력 지침: 위 역할과 지침에 따라, 제공된 아이디어 요약에 대해 사용자의 핵심 동기를 탐색하는 가장 적절한 단일 질문을 JSON 객체로 생성하세요.
 """
     # --- ---
 
-    # --- 4. LLM 호출 및 결과 처리 ---
+    # 4. LLM 호출
     prompt_messages: List[BaseMessage] = [
         SystemMessage(content=system_prompt_text.strip())
     ]
-    model_name_to_log = getattr(llm_questioner, 'model', getattr(llm_questioner, 'model_name', 'N/A'))
-    print(f"AskMotivationWhy: LLM 호출 준비 (Model: {model_name_to_log}, Structured Output: MotivationQuestionOutput)")
 
     try:
         response_object: MotivationQuestionOutput = await structured_llm.ainvoke(prompt_messages)
-        print(f"AskMotivationWhy: LLM 응답 수신 (구조화됨) - Question: {response_object.motivation_question[:50]}...")
         ai_question_content = response_object.motivation_question
-        error_message_to_return = None # 성공 시 오류 없음
+        error_message_to_return = None
+        print(f"AskMotivationWhy: 질문 생성 완료 → {ai_question_content[:60]}...")
 
     except Exception as e:
-        # LLM 호출 중 발생한 오류 처리
-        error_msg = f"AskMotivationWhy: LLM 호출 오류 - {e}"
-        print(error_msg)
         import traceback
         traceback.print_exc()
-        # 오류 발생 시 사용자에게 보여줄 메시지 생성
-        ai_question_content = f"(시스템 오류: 동기 질문 생성에 실패했습니다. 아이디어에 대해 다시 말씀해주시겠어요? - {e})"
-        error_message_to_return = error_msg # 상태에 오류 기록
+        ai_question_content = f"(시스템 오류: 동기 질문 생성 실패 - {e})"
+        error_message_to_return = str(e)
 
-    # --- ---
-
-    # --- 5. 상태 업데이트 준비 및 반환 ---
-    updates_to_state = {
+    # 5. 인터럽트 발생 (사용자 입력 대기)
+    print("AskMotivationWhy: 질문 생성 후 interrupt 발생 → 사용자 응답 대기 중단")
+    raise interrupt(ai_question_content).with_data({
         "messages": messages + [AIMessage(content=ai_question_content)],
         "error_message": error_message_to_return,
-    }
+    })
 
-    print(f"AskMotivationWhy: 상태 업데이트 반환 - AI Message 추가됨, Error: {error_message_to_return}")
-    # --- ---
-
-    return updates_to_state
