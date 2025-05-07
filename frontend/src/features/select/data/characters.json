@@ -1,0 +1,74 @@
+[
+  {
+    "id": "critic",
+    "name": "Critic",
+    "role": "비판자",
+    "country": "KR",
+    "portrait": "/img/roster/critic.png",
+    "model": "/models/critic.glb",
+    "stats": { "power": 70, "logic": 95, "empathy": 40, "speed": 55 }
+  },
+  {
+    "id": "mediator",
+    "name": "Mediator",
+    "role": "중재자",
+    "country": "US",
+    "portrait": "/img/roster/mediator.png",
+    "model": "/models/mediator.glb",
+    "stats": { "power": 55, "logic": 80, "empathy": 90, "speed": 60 }
+  },
+  {
+    "id": "why",
+    "name": "why",
+    "role": "탐색자",
+    "country": "CA",
+    "portrait": "/img/roster/why.png",
+    "model": "/models/why.glb",
+    "stats": { "power": 60, "logic": 85, "empathy": 70, "speed": 65 }
+  },
+  {
+    "id": "advocate",
+    "name": "Advocate",
+    "role": "옹호자",
+    "country": "DE",
+    "portrait": "/img/roster/advocate.png",
+    "model": "/models/advocate.glb",
+    "stats": { "power": 65, "logic": 88, "empathy": 80, "speed": 60 }
+  },
+  {
+    "id": "brainstormer",
+    "name": "brainstormer",
+    "role": "전략가",
+    "country": "FR",
+    "portrait": "/img/roster/brainstormer.png",
+    "model": "/models/brainstormer.glb",
+    "stats": { "power": 75, "logic": 92, "empathy": 55, "speed": 70 }
+  },
+  {
+    "id": "skeptic",
+    "name": "skeptic",
+    "role": "분석가",
+    "country": "JP",
+    "portrait": "/img/roster/skeptic.png",
+    "model": "/models/skeptic.glb",
+    "stats": { "power": 50, "logic": 97, "empathy": 45, "speed": 68 }
+  },
+  {
+    "id": "summarizer",
+    "name": "summarizer",
+    "role": "도전자",
+    "country": "BR",
+    "portrait": "/img/roster/summarizer.png",
+    "model": "/models/summarizer.glb",
+    "stats": { "power": 85, "logic": 70, "empathy": 55, "speed": 80 }
+  },
+  {
+    "id": "storyteller",
+    "name": "storyteller",
+    "role": "조력자",
+    "country": "IN",
+    "portrait": "/img/roster/storyteller.png",
+    "model": "/models/storyteller.glb",
+    "stats": { "power": 45, "logic": 75, "empathy": 95, "speed": 50 }
+  }
+]

@@ -4,6 +4,7 @@ import './globals.css';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Poppins } from 'next/font/google';
+import BGMManager from '@/features/select/components/BGMManager';
 
 // 로고용 폰트 설정
 const poppins = Poppins({ subsets: ['latin'], weight: ['700'] });
@@ -38,7 +39,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
            px-4 py-2
            pt-[64px]    /* 헤더 높이(px)만큼 패딩 추가 */
          "
-       >
+       >  {/* 페이지 진입 시 BGMManager가 바로 마운트되어 자동 실행됩니다 */}
+          <BGMManager />
           {children}
         </main>
 
