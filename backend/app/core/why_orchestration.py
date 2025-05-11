@@ -59,7 +59,7 @@ if checkpointer is not None:
 
         def decide_after_summary(state: WhyGraphState) -> str:
             idea_summary_exists = bool(state.get("idea_summary", "").strip())
-            motivation_summary_exists = bool(state.get("motivation_summary", "").strip())
+            motivation_summary_exists = bool(state.get("motivation_summary", "").strip()) or bool(state.get("final_motivation_summary", "").strip())
             print(f"  [COND_EDGE] decide_after_summary: idea_summary_exists={idea_summary_exists}, motivation_summary_exists={motivation_summary_exists}")
             if idea_summary_exists and motivation_summary_exists:
                  return "identify_assumptions"
@@ -237,7 +237,6 @@ async def run_why_exploration_turn(
                 if isinstance(interrupt_value, dict):
                     print(f"    [DEBUG DataMerge] Found data dict in Interrupt object's value: {interrupt_value}")
                     # 노드가 전달한 상태 업데이트로 final_state_to_save를 덮어씁니다.
-                    # 이렇게 하면 'messages', 'has_asked_initial' 등이 올바르게 반영됩니다.
                     final_state_to_save.update(interrupt_value)
                     print(f"      [DEBUG DataMerge] Merged/Updated final_state_to_save with Interrupt's value (dict).")
                     # 사용자에게 전달할 메시지는 이 딕셔너리 내의 특정 키에서 가져옵니다.
@@ -249,7 +248,6 @@ async def run_why_exploration_turn(
                         assistant_response_to_user = str(interrupt_value["clarification_question"])
                         interrupted_by_node_with_message = True
                         print(f"      [DEBUG DataMerge] Using 'clarification_question' from interrupt data: '{assistant_response_to_user[:100]}...'")
-                    # 다른 interrupt 메시지 키들도 여기에 추가 가능
                 elif interrupt_value is not None: # value가 dict가 아니고 단순 문자열 등일 경우
                     value_str = str(interrupt_value)
                     if value_str.strip():

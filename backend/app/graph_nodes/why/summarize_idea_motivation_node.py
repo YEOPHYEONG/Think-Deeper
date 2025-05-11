@@ -93,9 +93,8 @@ async def summarize_idea_motivation_node(state: Dict[str, Any]) -> Dict[str, Any
         'messages': messages + [AIMessage(content=f"아이디어 및 동기 요약 완료 (내부 처리)")], # 사용자에게 직접 보이지 않는 내부 처리 메시지
         'idea_summary': ai_idea,
         'motivation_summary': ai_motivation, # 조건부 엣지에서 사용할 키
-        # 'final_motivation_summary'는 유지하거나 여기서 생성된 ai_motivation으로 덮어쓸지 결정
-        # 'assistant_message'는 interrupt 방식에서는 불필요
-        "error_message": error_msg if 'error_msg' in locals() else None # LLM 오류 기록
+        'final_motivation_summary': ai_motivation, # final_motivation_summary도 동일한 값으로 설정
+        'error_message': error_msg if 'error_msg' in locals() else None # LLM 오류 기록
     }
     print(f"[SUMMZ][NODE_LIFECYCLE] <<< Exiting summarize_idea_motivation_node >>>")
     print(f"  [SUMMZ][STATE_OUT] idea_summary: '{return_state.get('idea_summary')}'")

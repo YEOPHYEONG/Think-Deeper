@@ -26,9 +26,9 @@ async def probe_assumption_node(state: Dict[str, Any]) -> Union[Dict[str, Any], 
     """
     print("[PROBE][NODE_LIFECYCLE] Entering probe_assumption_node")
 
-    messages: List[Union[BaseMessage, dict]] = state.get('messages', [])
+    # 현재 단계의 대화 기록만 사용
+    current_probe_messages: List[Union[BaseMessage, dict]] = state.get('probe_messages', [])
     identified_assumptions: List[str] = state.get('identified_assumptions', [])
-    # probed_assumptions는 오케스트레이터에서 사용자 답변 후 업데이트되므로, 여기서는 읽기만 함
     current_probed_assumptions: List[str] = state.get('probed_assumptions', []) 
     idea_summary = state.get('idea_summary', 'N/A')
     motivation_summary = state.get('motivation_summary') or state.get('final_motivation_summary', 'N/A')
@@ -36,7 +36,7 @@ async def probe_assumption_node(state: Dict[str, Any]) -> Union[Dict[str, Any], 
     # 메시지 이력 문자열화 (LLM 프롬프트용)
     history_lines_for_prompt = []
     current_messages_for_state = [] # BaseMessage 객체로 일관성 유지
-    for i, msg_data in enumerate(messages):
+    for i, msg_data in enumerate(current_probe_messages):
         role = None; content = None; msg_obj = None
         if isinstance(msg_data, HumanMessage): 
             role, content, msg_obj = "User", msg_data.content, msg_data
@@ -59,7 +59,6 @@ async def probe_assumption_node(state: Dict[str, Any]) -> Union[Dict[str, Any], 
         elif isinstance(msg_data, dict) and msg_obj is None and content is not None : # 변환 실패했으나 내용은 있는 경우 dict 유지(주의)
             current_messages_for_state.append(msg_data)
 
-
     # 다음 탐색할 가정 선택
     assumption_to_probe: Optional[str] = None
     for assumption_str in identified_assumptions:
@@ -71,11 +70,11 @@ async def probe_assumption_node(state: Dict[str, Any]) -> Union[Dict[str, Any], 
     if assumption_to_probe is None:
         print("  [PROBE][DEBUG] All assumptions already probed. Setting flag and returning state.")
         return {
-            'messages': current_messages_for_state, # 현재까지의 메시지 (BaseMessage 객체)
-            'probed_assumptions': current_probed_assumptions, # 변경 없음
-            'assumptions_fully_probed': True, # 플래그 설정
-            'assumption_question': None, # 질문 없음
-            'assumption_being_probed_now': None # 탐색 중인 가정 없음
+            'probe_messages': current_messages_for_state, # 현재 단계의 대화 기록
+            'probed_assumptions': current_probed_assumptions,
+            'assumptions_fully_probed': True,
+            'assumption_question': None,
+            'assumption_being_probed_now': None
         }
 
     print(f"  [PROBE][DEBUG] Assumption to probe: {assumption_to_probe}")
@@ -118,14 +117,13 @@ async def probe_assumption_node(state: Dict[str, Any]) -> Union[Dict[str, Any], 
         print(f"  [PROBE][DEBUG] Generated question: {ai_generated_question}")
     except Exception as e:
         print(f"  [PROBE][ERROR] LLM call failed: {e}")
-        # import traceback; traceback.print_exc()
         ai_generated_question = f"(시스템 오류: 가정 탐색 질문 생성 실패 - {e})"
         error_interrupt_data = {
-            'messages': current_messages_for_state + [AIMessage(content=ai_generated_question)],
-            'probed_assumptions': current_probed_assumptions, 
+            'probe_messages': current_messages_for_state + [AIMessage(content=ai_generated_question)],
+            'probed_assumptions': current_probed_assumptions,
             'assumptions_fully_probed': False,
             'error_message': f"LLM Error in probe_assumption: {str(e)}",
-            "assumption_question": ai_generated_question, # 오류 메시지를 질문으로 전달
+            "assumption_question": ai_generated_question,
             "assumption_being_probed_now": assumption_to_probe 
         }
         print(f"[PROBE][NODE_LIFECYCLE] Exiting probe_assumption_node with interrupt (error): {ai_generated_question}")
@@ -134,11 +132,11 @@ async def probe_assumption_node(state: Dict[str, Any]) -> Union[Dict[str, Any], 
     # 인터럽트 발생
     updated_messages_with_ai_q = current_messages_for_state + [AIMessage(content=ai_generated_question)]
     interrupt_data_for_probe = {
-        'messages': updated_messages_with_ai_q,
-        'probed_assumptions': current_probed_assumptions, # 아직 업데이트 안 함 (오케스트레이터가 다음 턴에)
+        'probe_messages': updated_messages_with_ai_q, # 현재 단계의 대화 기록만 유지
+        'probed_assumptions': current_probed_assumptions,
         'assumptions_fully_probed': False,
-        "assumption_question": ai_generated_question,  # <<< *** 중요: 명시적으로 질문을 상태에 추가 ***
-        "assumption_being_probed_now": assumption_to_probe # 오케스트레이터가 다음 턴에 probed_assumptions 업데이트용
+        "assumption_question": ai_generated_question,
+        "assumption_being_probed_now": assumption_to_probe
     }
     print(f"[PROBE][NODE_LIFECYCLE] Exiting probe_assumption_node with interrupt (question): {ai_generated_question}")
     raise interrupt(ai_generated_question).with_data(interrupt_data_for_probe)

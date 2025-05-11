@@ -90,7 +90,7 @@ async def identify_assumptions_node(state: Dict[str, Any]) -> Dict[str, Any]:
 2. **중요도 평가:** 각 가정이 틀렸을 때 아이디어에 미치는 **치명적 영향**을 기준으로 평가하세요.
 3. **정렬:** 중요한 가정이 리스트 상단에 오도록 내림차순으로 정렬하세요.
 4. **명확하고 독립적 문장:** 각 가정을 간결하고 독립된 문장으로 작성하세요.
-5. **구조화된 출력:** 지정된 JSON 형식(`{"identified_assumptions": [...]}`)으로 출력하세요.
+5. **구조화된 출력:** 지정된 JSON 형식({{"identified_assumptions": ["가정1", "가정2", ...]}})으로 출력하세요.
 """
     # Use the full dialogue history for context
     user_prompt = (
