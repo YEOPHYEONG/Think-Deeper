@@ -12,7 +12,7 @@ export default function CharacterGrid({ roster }: Props) {
   return (
   
       /* 캐릭터 카드들 */
-      <div className="grid grid-cols-4 gap-6">
+      <div className="grid grid-cols-4 gap-4 justify-center">
       {roster.map((c, i) => (
         <CharacterCard key={c.id} c={c} index={i} />
       ))}
