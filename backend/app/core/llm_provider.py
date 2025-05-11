@@ -48,7 +48,7 @@ def get_llm_client(provider: str = "openai", model_name: str = "gpt-4o", tempera
 def get_high_performance_llm():
     """ 기본 고성능 LLM 반환 (예: GPT-4o) """
     # 원하는 OpenAI 모델명으로 변경 (예: "gpt-4o", "gpt-4-turbo")
-    return get_llm_client(provider="openai", model_name="gpt-4.1-2025-04-14", temperature=0.7)
+    return get_llm_client(provider="openai", model_name="gpt-4.1-mini-2025-04-14", temperature=0.7)
 
 def get_fast_llm():
     """ 기본 빠른 LLM 반환 (예: GPT-4o Mini) """

@@ -2,242 +2,355 @@
 
 from typing import List, Optional, Dict, Any, Union
 from fastapi import HTTPException
-from langgraph.graph import StateGraph
-from langchain_core.messages import HumanMessage, AIMessage, BaseMessage 
+from langgraph.graph import StateGraph, END
+from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 from langchain_core.runnables import RunnableConfig
-from langgraph.errors import Interrupt, GraphInterrupt # Interrupt는 이제 사용 안 함
-from langgraph.checkpoint.memory import MemorySaver 
+from langgraph.errors import GraphInterrupt
+from langgraph.types import Interrupt as TypesInterrupt # 명시적으로 langgraph.types.Interrupt 사용
+from langgraph.checkpoint.memory import MemorySaver
 import copy
+import asyncio
+import traceback
 
-# (다른 import 유지)
+from app.core.llm_provider import get_high_performance_llm
 from app.core.user_state import UserStateStore
 from app.db.session import async_session_factory
 from app.core.config import get_settings
-from app.models.why_graph_state import WhyGraphState 
+from app.models.why_graph_state import WhyGraphState
 from app.graph_nodes.why.motivation_elicitation_node import motivation_elicitation_node
-# 다른 노드들도 messages 채널을 사용하고 상태 딕셔너리를 반환하도록 수정 필요
+# 다른 노드들도 interrupt 시 value에 상태 dict를 전달하도록 수정 필요할 수 있음
 from app.graph_nodes.why.summarize_idea_motivation_node import summarize_idea_motivation_node
-# identify_assumptions_node 와 probe_assumption_node도 Interrupt 대신 dict를 반환하도록 수정 필요
-from app.graph_nodes.why.identify_assumptions_node import identify_assumptions_node 
-from app.graph_nodes.why.probe_assumption_node import probe_assumption_node 
-from app.graph_nodes.why.findings_summarization_node import findings_summarization_node 
-from app.graph_nodes.why.free_conversation_node import free_conversation_node 
-
+from app.graph_nodes.why.identify_assumptions_node import identify_assumptions_node
+from app.graph_nodes.why.probe_assumption_node import probe_assumption_node
+from app.graph_nodes.why.findings_summarization_node import findings_summarization_node
+from app.graph_nodes.why.free_conversation_node import free_conversation_node
 
 settings = get_settings()
-checkpointer = MemorySaver() # MemorySaver 사용 유지
-user_store   = UserStateStore(async_session_factory) 
+checkpointer = MemorySaver()
+print("[Orchestrator Setup] Using MemorySaver for LangGraph's internal checkpointing.")
+user_store = UserStateStore(async_session_factory)
 
-workflow = StateGraph(WhyGraphState)
-# --- 노드 및 엣지 정의 (기존과 동일) ---
-workflow.add_node("motivation_elicitation", motivation_elicitation_node)
-workflow.add_node("summarize_idea_motivation", summarize_idea_motivation_node)
-workflow.add_node("identify_assumptions", identify_assumptions_node)
-workflow.add_node("probe_assumption", probe_assumption_node)
-workflow.add_node("findings_summarization", findings_summarization_node)
-workflow.add_node("free_conversation", free_conversation_node)
-workflow.set_entry_point("motivation_elicitation")
+app_why_graph = None
+# (Graph Definition and Compilation - 이전과 동일하게 유지)
+if checkpointer is not None:
+    try:
+        workflow = StateGraph(WhyGraphState)
+        workflow.add_node("motivation_elicitation", motivation_elicitation_node)
+        workflow.add_node("summarize_idea_motivation", summarize_idea_motivation_node)
+        workflow.add_node("identify_assumptions", identify_assumptions_node)
+        workflow.add_node("probe_assumption", probe_assumption_node)
+        workflow.add_node("findings_summarization", findings_summarization_node)
+        workflow.add_node("free_conversation", free_conversation_node)
+        workflow.set_entry_point("motivation_elicitation")
 
-# 조건부 엣지는 상태의 필드를 기반으로 하므로 그대로 유지 가능
-workflow.add_conditional_edges("motivation_elicitation", {
-    "motivation_elicitation": lambda st: not st.get("motivation_cleared", False),
-    "summarize_idea_motivation": lambda st:     st.get("motivation_cleared", False),
-})
-# (다른 엣지 정의 유지)
-workflow.add_conditional_edges("summarize_idea_motivation", {
-    "identify_assumptions": lambda st: bool(st.get("idea_summary")) and bool(st.get("motivation_summary"))
-})
-workflow.add_conditional_edges("identify_assumptions", {
-    "probe_assumption": lambda st: len(st.get("identified_assumptions", [])) > 0,
-    "findings_summarization": lambda st: len(st.get("identified_assumptions", [])) == 0, 
-})
-workflow.add_conditional_edges("probe_assumption", {
-    # probe_assumption 노드가 사용자 입력을 기다리는 상태인지 확인하는 키 추가 필요 (예: 'needs_probe_input': True)
-    # 또는 마지막 메시지가 AI 질문인지 확인하는 방식으로 처리 가능
-    "probe_assumption": lambda st: len(set(st.get("probed_assumptions", []))) < len(st.get("identified_assumptions", [])) and not st.get("assumptions_fully_probed"), # assumptions_fully_probed 플래그 사용
-    "findings_summarization": lambda st: len(set(st.get("probed_assumptions", []))) >= len(st.get("identified_assumptions", [])) or st.get("assumptions_fully_probed"), # 모든 가정이 탐색되었으면 요약으로
-})
-workflow.add_conditional_edges("findings_summarization", {
-    "free_conversation": lambda st: bool(st.get("findings_summary"))
-})
-workflow.add_edge("free_conversation", "free_conversation") 
-# --- END 노드 및 엣지 정의 ---
+        def decide_after_motivation(state: WhyGraphState) -> str:
+            motivation_cleared = state.get("motivation_cleared", False)
+            # motivation_elicitation_node가 interrupt 대신 상태를 반환하는 경우,
+            # 이 엣지는 해당 상태를 기반으로 다음 노드를 결정합니다.
+            # 만약 interrupt가 발생했다면, ainvoke는 중단된 상태를 반환하고 이 엣지는 실행되지 않습니다.
+            # 오케스트레이터가 interrupt를 처리하고 사용자에게 응답을 전달합니다.
+            print(f"  [COND_EDGE] decide_after_motivation: motivation_cleared={motivation_cleared}")
+            if motivation_cleared: # 노드가 명확하다고 판단하여 상태를 반환한 경우
+                return "summarize_idea_motivation"
+            # 노드가 interrupt를 발생시켰거나, 명확하지 않다고 판단하여 특정 키 없이 상태를 반환한 경우
+            # (현재 motivation_elicitation_node는 명확하지 않으면 항상 interrupt 발생)
+            print(f"  [COND_EDGE][WARN] decide_after_motivation: motivation not cleared or node interrupted, ending graph run for this turn.")
+            return END # 현재 턴 종료, 오케스트레이터가 interrupt 처리
 
-app_why_graph = workflow.compile(checkpointer=checkpointer) 
+        def decide_after_summary(state: WhyGraphState) -> str:
+            idea_summary_exists = bool(state.get("idea_summary", "").strip())
+            motivation_summary_exists = bool(state.get("motivation_summary", "").strip())
+            print(f"  [COND_EDGE] decide_after_summary: idea_summary_exists={idea_summary_exists}, motivation_summary_exists={motivation_summary_exists}")
+            if idea_summary_exists and motivation_summary_exists:
+                 return "identify_assumptions"
+            print(f"  [COND_EDGE][WARN] decide_after_summary: Missing summary, ending.")
+            return END
+
+        def decide_after_identification(state: WhyGraphState) -> str:
+            assumptions_identified = bool(state.get("identified_assumptions"))
+            print(f"  [COND_EDGE] decide_after_identification: assumptions_identified={assumptions_identified}")
+            if assumptions_identified:
+                return "probe_assumption"
+            return "findings_summarization"
+
+        def decide_after_probing(state: WhyGraphState) -> str:
+            all_probed = state.get("assumptions_fully_probed", False)
+            print(f"  [COND_EDGE] decide_after_probing: assumptions_fully_probed={all_probed}")
+            if all_probed:
+                return "findings_summarization"
+            print(f"  [COND_EDGE][WARN] decide_after_probing: assumptions not fully probed, expecting interrupt or ending.")
+            return END
+
+        def decide_after_findings(state: WhyGraphState) -> str:
+            findings_summary_exists = bool(state.get("findings_summary", "").strip())
+            print(f"  [COND_EDGE] decide_after_findings: findings_summary_exists={findings_summary_exists}")
+            return "free_conversation" if findings_summary_exists else END
+
+        workflow.add_conditional_edges("motivation_elicitation", decide_after_motivation, {
+            "summarize_idea_motivation": "summarize_idea_motivation", END: END
+        })
+        workflow.add_conditional_edges("summarize_idea_motivation", decide_after_summary, {
+            "identify_assumptions": "identify_assumptions", END: END
+        })
+        workflow.add_conditional_edges("identify_assumptions", decide_after_identification, {
+            "probe_assumption": "probe_assumption", "findings_summarization": "findings_summarization"
+        })
+        workflow.add_conditional_edges("probe_assumption", decide_after_probing, {
+            "findings_summarization": "findings_summarization", END: END
+        })
+        workflow.add_conditional_edges("findings_summarization", decide_after_findings, {
+            "free_conversation": "free_conversation", END: END
+        })
+        workflow.add_edge("free_conversation", END)
+
+        app_why_graph = workflow.compile(checkpointer=checkpointer)
+        print("[Orchestrator Setup] Graph compiled successfully.")
+    except Exception as e_compile:
+        print(f"[Orchestrator Setup][ERROR] Failed to compile graph: {e_compile}")
+        traceback.print_exc()
+        app_why_graph = None
+else:
+    print("[Orchestrator Setup][ERROR] Cannot compile graph: Checkpointer is None.")
+
 
 def _serialize_state_for_db(state: Dict[str, Any]) -> Dict[str, Any]:
-    # (기존 함수 내용 유지 - messages 직렬화 포함)
-    if not state: return {}
-    serializable_state = copy.deepcopy(state) 
-    if 'messages' in serializable_state and isinstance(serializable_state['messages'], list):
-        serializable_state['messages'] = [
-            {"type": msg.type, "content": msg.content, "additional_kwargs": msg.additional_kwargs if hasattr(msg, 'additional_kwargs') else {}} if isinstance(msg, BaseMessage) else msg
-            for msg in serializable_state['messages']
-        ]
-    if 'channel_values' in serializable_state and isinstance(serializable_state['channel_values'], dict):
-        for channel, msgs_list in serializable_state['channel_values'].items():
-            if isinstance(msgs_list, list):
-                serializable_state['channel_values'][channel] = [
-                    {"type": msg.type, "content": msg.content, "additional_kwargs": msg.additional_kwargs if hasattr(msg, 'additional_kwargs') else {}} if isinstance(msg, BaseMessage) else msg
-                    for msg in msgs_list
-                ]
+    # ... (이전과 동일)
+    if not isinstance(state, dict): return {}
+    serializable_state = {}
+    keys_to_exclude = {'__interrupt__', 'parent_config', 'pending_writes', 'pending_sends',
+                       'channel_values', 'versions_seen', 'metadata', 'configurable'}
+    for key, value in state.items():
+        if key in keys_to_exclude: continue
+        if key == 'messages':
+            serializable_messages = []
+            if isinstance(value, list):
+                for msg in value:
+                    if isinstance(msg, BaseMessage):
+                        serializable_messages.append({
+                            "type": msg.type, "content": msg.content,
+                            "additional_kwargs": getattr(msg, 'additional_kwargs', {})
+                        })
+                    elif isinstance(msg, dict) and "type" in msg and "content" in msg:
+                         serializable_messages.append(msg)
+            serializable_state[key] = serializable_messages
+        elif isinstance(value, (str, int, float, bool, type(None), list, dict)):
+             serializable_state[key] = value
     return serializable_state
 
 async def run_why_exploration_turn(
     session_id: str,
     user_input: Optional[str] = None,
-    initial_topic: Optional[str] = None 
+    initial_topic: Optional[str] = None
 ) -> Optional[str]:
-    state = await user_store.load(session_id) or {} 
-    print(f"[DEBUG Orchestrator] Loaded state from UserStore for session {session_id}: {str(state)[:500]}...")
+    # ... (함수 시작, 상태 로드, graph_input 초기화 로직은 이전과 동일하게 유지) ...
+    if not app_why_graph:
+         print("[ERROR Orchestrator] Graph is not compiled!")
+         raise HTTPException(status_code=500, detail="Graph is not compiled or unavailable.")
 
-    is_new_session = not state
-    if is_new_session: 
-        print(f"[DEBUG Orchestrator] Session {session_id} is new or state is empty, initializing.")
-        # (상태 초기화 로직 유지)
-        state = {
-            "messages": [], "channel_values": {"__default__": []}, "dialogue_history": [], 
-            "raw_topic": initial_topic, "raw_idea": None, "has_asked_initial": False,
-            "motivation_cleared": False, "final_motivation_summary": "", "idea_summary": "",
-            "motivation_summary": "", "identified_assumptions": [], "probed_assumptions": [], 
-            "assumptions_fully_probed": False, "findings_summary": "", "older_history_summary": "",
-            "error_message": None, "metadata": {}, "versions_seen": {}, 
+    print(f"[DEBUG Orchestrator] --- Starting Turn --- Session: {session_id}")
+    config: RunnableConfig = {"configurable": {"thread_id": session_id}}
+    graph_input: Dict[str, Any] = {}
+
+    is_first_turn_of_session = False
+    current_state_from_store = await user_store.load(session_id) or {}
+    print(f"  [DEBUG Orchestrator] Loaded state from UserStore for session {session_id} (keys: {list(current_state_from_store.keys())})")
+    print(f"  [DEBUG Orchestrator] 'has_asked_initial' from UserStore: {current_state_from_store.get('has_asked_initial')}")
+
+    if user_input is not None:
+        if not current_state_from_store:
+            print(f"  [WARN Orchestrator] No state found for {session_id}, but input present. Treating as first turn.")
+            if not initial_topic: initial_topic = user_input
+            is_first_turn_of_session = True
+        else:
+            graph_input = copy.deepcopy(current_state_from_store)
+            loaded_messages_serial = graph_input.get("messages", [])
+            messages_list_obj = []
+            if isinstance(loaded_messages_serial, list):
+                for msg_data in loaded_messages_serial:
+                    try:
+                        if isinstance(msg_data, dict) and "type" in msg_data and "content" in msg_data:
+                            msg_type, content, add_kwargs = msg_data.get("type"), msg_data.get("content"), msg_data.get("additional_kwargs", {})
+                            if content is not None:
+                                if msg_type == "human": messages_list_obj.append(HumanMessage(content=content, additional_kwargs=add_kwargs))
+                                elif msg_type == "ai" or msg_type == "assistant": messages_list_obj.append(AIMessage(content=content, additional_kwargs=add_kwargs))
+                                else: messages_list_obj.append(BaseMessage(type=msg_type, content=content, additional_kwargs=add_kwargs))
+                        elif isinstance(msg_data, BaseMessage): messages_list_obj.append(msg_data)
+                    except Exception as e_des: print(f"  [ERROR Orchestrator] Deserializing message failed: {e_des}, data: {msg_data}")
+            graph_input["messages"] = messages_list_obj
+            assumption_probed_last_turn = graph_input.get("assumption_being_probed_now")
+            if assumption_probed_last_turn:
+                current_probed_list: List[str] = graph_input.get("probed_assumptions", [])
+                if assumption_probed_last_turn not in current_probed_list: current_probed_list.append(assumption_probed_last_turn)
+                graph_input["probed_assumptions"] = current_probed_list
+                graph_input["assumption_being_probed_now"] = None
+            graph_input.setdefault("messages", []).append(HumanMessage(content=user_input))
+    else:
+        if not current_state_from_store : is_first_turn_of_session = True
+        else: graph_input = current_state_from_store
+
+    if is_first_turn_of_session:
+        if not initial_topic:
+             print("[ERROR Orchestrator] First turn but no initial_topic or user_input provided.")
+             raise HTTPException(status_code=400, detail="Initial topic or user input is required for the first turn.")
+        graph_input = {
+            "messages": [HumanMessage(content=initial_topic)], "raw_topic": initial_topic, "raw_idea": initial_topic,
+            "initial_topic": initial_topic, "has_asked_initial": False, "motivation_cleared": False,
+            "final_motivation_summary": None, "idea_summary": None, "motivation_summary": None,
+            "identified_assumptions": [], "probed_assumptions": [], "assumption_being_probed_now": None,
+            "assumptions_fully_probed": False, "findings_summary": None, "older_history_summary": None, "error_message": None,
         }
+        print(f"  [DEBUG Orchestrator] Initialized new state for session {session_id} using initial_topic: '{initial_topic}'")
 
-    if user_input:
-        print(f"[DEBUG Orchestrator] User input for session {session_id}: {user_input}")
-        # (사용자 입력 처리 로직 유지 - messages 채널 사용)
-        user_h_message = HumanMessage(content=user_input)
-        if not isinstance(state.get("messages"), list): state["messages"] = []
-        state["messages"].append(user_h_message)
-        if not isinstance(state.get("channel_values"), dict): state["channel_values"] = {"__default__": []}
-        state.setdefault("channel_values", {}).setdefault("__default__", []).append(user_h_message)
-        if not state.get('raw_idea') and not state.get('has_asked_initial'): 
-            state['raw_idea'] = user_input
-            if not state.get('raw_topic') and is_new_session: 
-                 state['raw_topic'] = user_input
-    
-    print(f"[DEBUG Orchestrator] State BEFORE UserStore save (if any) and BEFORE ainvoke for session {session_id}:")
-    # (상세 로깅 유지)
-    print(f"  - messages: {str(state.get('messages'))[:300]}...")
-    print(f"  - has_asked_initial: {state.get('has_asked_initial')}")
-
-    graph_input = state.copy() 
-    print(f"[DEBUG Orchestrator] graph_input (before ainvoke) for session {session_id}: {str(graph_input)[:500]}...")
+    assistant_response_to_user = None
+    final_state_to_save = graph_input
 
     try:
-        run_config: RunnableConfig = {"configurable": {"thread_id": session_id}} 
-        print(f"[DEBUG Orchestrator] Calling app_why_graph.ainvoke for session {session_id} with MemorySaver...")
-        
-        final_state_after_ainvoke = await app_why_graph.ainvoke(graph_input, run_config)
-        
-        print(f"[DEBUG Orchestrator] app_why_graph.ainvoke finished for session {session_id}.")
-        if isinstance(final_state_after_ainvoke, dict):
-            print(f"  Keys in final_state_after_ainvoke: {list(final_state_after_ainvoke.keys())}")
-            print(f"  final_state_after_ainvoke['messages'] sample: {str(final_state_after_ainvoke.get('messages'))[:400]}...")
-            print(f"  final_state_after_ainvoke['has_asked_initial']: {final_state_after_ainvoke.get('has_asked_initial')}")
-            print(f"  final_state_after_ainvoke['motivation_cleared']: {final_state_after_ainvoke.get('motivation_cleared')}") 
-            # 다른 중요한 상태 필드 로깅 추가 (예: identify/probe 관련)
-            print(f"  final_state_after_ainvoke['identified_assumptions']: {final_state_after_ainvoke.get('identified_assumptions')}")
-            print(f"  final_state_after_ainvoke['probed_assumptions']: {final_state_after_ainvoke.get('probed_assumptions')}")
-            print(f"  final_state_after_ainvoke['assumptions_fully_probed']: {final_state_after_ainvoke.get('assumptions_fully_probed')}")
+        print(f"  [DEBUG Orchestrator] Calling app_why_graph.ainvoke with input keys: {list(graph_input.keys())}")
+        print(f"  [DEBUG Orchestrator] Value of 'has_asked_initial' in graph_input BEFORE ainvoke: {graph_input.get('has_asked_initial')}")
+        print(f"  [DEBUG Orchestrator] Content of 'messages' in graph_input BEFORE ainvoke (showing last 3): {[m.content if isinstance(m, BaseMessage) else m for m in graph_input.get('messages', [])[-3:]]}")
 
+        final_run_output = await app_why_graph.ainvoke(graph_input, config)
+        print(f"  [DEBUG Orchestrator] ainvoke call completed.")
+        print(f"  [DEBUG Orchestrator] Full final_run_output from ainvoke: {final_run_output}")
+
+        if not isinstance(final_run_output, dict):
+            print(f"  [ERROR Orchestrator] ainvoke returned unexpected type: {type(final_run_output)}")
+            assistant_response_to_user = "(오류: 그래프 응답 형식 문제)"
         else:
-            print(f"  final_state_after_ainvoke is not a dict: {type(final_state_after_ainvoke)}")
+            final_state_to_save = final_run_output.copy() # 중요: 복사본으로 작업
+            interrupted_by_node_with_message = False
+            
+            # --- START: Modified Interrupt data handling (v6) ---
+            interrupt_payload_list = final_state_to_save.get("__interrupt__")
+            actual_interrupt_object = None
+            
+            if isinstance(interrupt_payload_list, list) and interrupt_payload_list:
+                actual_interrupt_object = interrupt_payload_list[0]
+            elif isinstance(interrupt_payload_list, (GraphInterrupt, TypesInterrupt)): # langgraph.errors 또는 langgraph.types의 Interrupt 객체
+                actual_interrupt_object = interrupt_payload_list
 
-        assistant_response_to_user = None
-        state_to_save_in_user_store = final_state_after_ainvoke.copy() if isinstance(final_state_after_ainvoke, dict) else {}
-
-        # --- 수정된 응답 결정 로직 ---
-        if isinstance(final_state_after_ainvoke, dict):
-            messages_list = final_state_after_ainvoke.get('messages', [])
-            last_message_obj = messages_list[-1] if messages_list else None
-
-            # 1. 마지막 메시지가 AI 메시지인지 확인
-            if isinstance(last_message_obj, AIMessage):
-                # 2. 이 AI 메시지가 사용자 입력을 요구하는 질문인지 판단
-                #    (motivation_cleared=False 또는 assumptions_fully_probed=False 등 상태 확인)
-                motivation_cleared = final_state_after_ainvoke.get('motivation_cleared', False)
-                assumptions_fully_probed = final_state_after_ainvoke.get('assumptions_fully_probed', False)
-                # 가정 식별 단계 메시지인지 확인 (identify_assumptions_node가 메시지 추가 시) - 예시
-                # is_assumption_id_msg = "다음은 식별된 핵심 가정들입니다" in last_message_obj.content 
-
-                if not motivation_cleared:
-                     assistant_response_to_user = last_message_obj.content
-                     print(f"[DEBUG Orchestrator] Motivation not cleared. Returning question: {assistant_response_to_user}")
-                elif final_state_after_ainvoke.get('identified_assumptions') and not assumptions_fully_probed:
-                     # 동기는 명확해졌고, 가정이 식별되었으나 아직 전부 탐색되지 않음 -> 가정 탐색 질문일 가능성 높음
-                     assistant_response_to_user = last_message_obj.content
-                     print(f"[DEBUG Orchestrator] Assumptions identified but not fully probed. Returning question: {assistant_response_to_user}")
-                # (Free conversation 등 다른 사용자 입력 대기 상태 추가 가능)
+            if actual_interrupt_object:
+                print(f"    [DEBUG DataMergeAttempt] actual_interrupt_obj_for_data type: {type(actual_interrupt_object)}")
+                # Interrupt 객체의 value가 노드가 전달한 상태 업데이트 딕셔너리일 것으로 기대
+                interrupt_value = getattr(actual_interrupt_object, 'value', None)
+                
+                if isinstance(interrupt_value, dict):
+                    print(f"    [DEBUG DataMerge] Found data dict in Interrupt object's value: {interrupt_value}")
+                    # 노드가 전달한 상태 업데이트로 final_state_to_save를 덮어씁니다.
+                    # 이렇게 하면 'messages', 'has_asked_initial' 등이 올바르게 반영됩니다.
+                    final_state_to_save.update(interrupt_value)
+                    print(f"      [DEBUG DataMerge] Merged/Updated final_state_to_save with Interrupt's value (dict).")
+                    # 사용자에게 전달할 메시지는 이 딕셔너리 내의 특정 키에서 가져옵니다.
+                    if "user_facing_message" in interrupt_value and interrupt_value["user_facing_message"]:
+                        assistant_response_to_user = str(interrupt_value["user_facing_message"])
+                        interrupted_by_node_with_message = True
+                        print(f"      [DEBUG DataMerge] Using 'user_facing_message' from interrupt data: '{assistant_response_to_user[:100]}...'")
+                    elif "clarification_question" in interrupt_value and interrupt_value["clarification_question"]:
+                        assistant_response_to_user = str(interrupt_value["clarification_question"])
+                        interrupted_by_node_with_message = True
+                        print(f"      [DEBUG DataMerge] Using 'clarification_question' from interrupt data: '{assistant_response_to_user[:100]}...'")
+                    # 다른 interrupt 메시지 키들도 여기에 추가 가능
+                elif interrupt_value is not None: # value가 dict가 아니고 단순 문자열 등일 경우
+                    value_str = str(interrupt_value)
+                    if value_str.strip():
+                        assistant_response_to_user = value_str
+                        interrupted_by_node_with_message = True
+                        print(f"    [DEBUG RespLogic P2-DirectValue] Response from interrupt object's direct 'value': '{assistant_response_to_user[:100]}...'")
                 else:
-                     # 동기 명확, 가정 탐색 완료 등 -> 최종 요약 또는 다른 완료 메시지일 수 있음
-                     assistant_response_to_user = last_message_obj.content
-                     print(f"[DEBUG Orchestrator] Graph likely finished or in free conversation. Returning last AI message: {assistant_response_to_user}")
+                    print(f"    [DEBUG DataMerge] Interrupt object's value is None or not a dict. Interrupt object: {actual_interrupt_object}")
+            # --- END: Modified Interrupt data handling ---
 
-            # 3. 마지막 메시지가 AI 메시지가 아니거나, AI 메시지지만 질문이 아닌 경우 (예: summarize 노드 직후)
-            else:
-                 print(f"[DEBUG Orchestrator] Last message is not AI or not considered a question requiring user input.")
-                 # 이 경우, 다음 턴을 기다릴 필요 없이 흐름이 완료되었거나 내부적으로 계속 진행되어야 함
-                 # 하지만 현재 구조에서는 ainvoke가 멈췄으므로, 사용자에게 반환할 메시지가 없을 수 있음
-                 assistant_response_to_user = "(흐름 진행 중...)" # 또는 None이나 다른 적절한 메시지
+            print(f"    [DEBUG StateCheck] 'has_asked_initial' in final_state_to_save AFTER DataMerge/Interrupt Handling: {final_state_to_save.get('has_asked_initial')}")
+            print(f"    [DEBUG StateCheck] 'messages' in final_state_to_save AFTER DataMerge/Interrupt Handling (showing last 3): {[m.content if isinstance(m, BaseMessage) else (m.get('content') if isinstance(m,dict) else m) for m in final_state_to_save.get('messages', [])[-3:]]}")
 
-        else: # final_state_after_ainvoke가 dict가 아닌 경우
-            print("[WARN Orchestrator] final_state_after_ainvoke is not a dict. Cannot determine response.")
-            assistant_response_to_user = "(오류: 상태 처리 불가)"
-        # --- END 수정된 응답 결정 로직 ---
+            # P1 로직은 이제 DataMerge 이후의 final_state_to_save를 기준으로 동작
+            if not interrupted_by_node_with_message: # DataMerge에서 user_facing_message 등을 못 찾은 경우
+                clarification_q = final_state_to_save.get("clarification_question")
+                assumption_q = final_state_to_save.get("assumption_question")
+                assistant_msg_from_state = final_state_to_save.get("assistant_message")
 
+                if clarification_q and str(clarification_q).strip():
+                    assistant_response_to_user = str(clarification_q)
+                    interrupted_by_node_with_message = True
+                    print(f"    [DEBUG RespLogic P1-Fallback] Response from 'clarification_question': '{assistant_response_to_user[:100]}...'")
+                elif assumption_q and str(assumption_q).strip():
+                    assistant_response_to_user = str(assumption_q)
+                    interrupted_by_node_with_message = True
+                    print(f"    [DEBUG RespLogic P1-Fallback] Response from 'assumption_question': '{assistant_response_to_user[:100]}...'")
+                elif assistant_msg_from_state and str(assistant_msg_from_state).strip():
+                    assistant_response_to_user = str(assistant_msg_from_state)
+                    interrupted_by_node_with_message = True
+                    print(f"    [DEBUG RespLogic P1-Fallback] Response from 'assistant_message': '{assistant_response_to_user[:100]}...'")
 
-        # UserStore에 최종 상태 저장
-        try:
-            if isinstance(state_to_save_in_user_store, dict) and state_to_save_in_user_store:
-                # 저장 전에 dialogue_history 재구성 (messages 기반)
-                final_messages = state_to_save_in_user_store.get("messages", [])
-                state_to_save_in_user_store["dialogue_history"] = [
-                    {"role": "user" if isinstance(m, HumanMessage) else "assistant", "content": m.content}
-                    for m in final_messages if isinstance(m, (HumanMessage, AIMessage))
-                ]
-                print(f"  Reconstructed dialogue_history before saving.")
+            if not interrupted_by_node_with_message:
+                print(f"    [DEBUG RespLogic P3] No explicit interrupt message from P1 or P2/DataMerge.")
+                # ... (P3 fallback logic은 이전과 동일하게 유지) ...
+                current_findings = final_state_to_save.get('findings_summary')
+                if current_findings and str(current_findings).strip():
+                    assistant_response_to_user = str(current_findings)
+                    print(f"    [DEBUG RespLogic P3] Using 'findings_summary': '{assistant_response_to_user[:100]}...'")
+                else:
+                    messages_in_state = final_state_to_save.get('messages', [])
+                    if messages_in_state and isinstance(messages_in_state[-1], AIMessage) and messages_in_state[-1].content.strip():
+                        assistant_response_to_user = messages_in_state[-1].content
+                        print(f"    [DEBUG RespLogic P3] Using last AIMessage in state: '{assistant_response_to_user[:100]}...'")
+                    else:
+                        assistant_response_to_user = "다음 탐색이 완료되었거나, 추가 진행을 위한 정보가 필요합니다."
+                        print(f"    [DEBUG RespLogic P3] Using default completion/fallback message.")
 
-                print(f"[DEBUG Orchestrator] State TO BE SAVED to UserStore for session {session_id}:")
-                # (상세 로깅 유지)
-                print(f"  - messages: {str(state_to_save_in_user_store.get('messages'))[:300]}...")
-                print(f"  - dialogue_history: {str(state_to_save_in_user_store.get('dialogue_history'))[:300]}...")
-                print(f"  - has_asked_initial: {state_to_save_in_user_store.get('has_asked_initial')}")
-                print(f"  - motivation_cleared: {state_to_save_in_user_store.get('motivation_cleared')}")
-                print(f"  - assumptions_fully_probed: {state_to_save_in_user_store.get('assumptions_fully_probed')}")
-
-                serializable_state = _serialize_state_for_db(state_to_save_in_user_store)
-                await user_store.upsert(session_id, serializable_state)
-                print(f"[DEBUG Orchestrator] ✓ State saved to UserStore for session {session_id}.")
-            # (기존 empty state 경고 로그 유지)
-
-        except Exception as e_upsert:
-            # (기존 예외 처리 로직 유지)
-            print(f"[ERROR Orchestrator] Failed to upsert state to UserStore for session {session_id}: {e_upsert}")
-            if assistant_response_to_user: return assistant_response_to_user
-            raise HTTPException(status_code=500, detail=f"Error saving application state: {e_upsert}")
-
-        return assistant_response_to_user # 결정된 응답 반환
-
-    except GraphInterrupt as gi: 
-        # (기존 예외 처리 로직 유지)
-        print(f"[ERROR Orchestrator] Unexpected GraphInterrupt exception caught for session {session_id}: {gi.value}")
-        try:
-            current_state_serializable = _serialize_state_for_db(state) 
-            await user_store.upsert(session_id, current_state_serializable)
-        except Exception as e_gi_save:
-            print(f"  Failed to save pre-ainvoke state on GraphInterrupt for session {session_id}: {e_gi_save}")
-        return str(gi.value) 
-
-    except Exception as e:
-        # (기존 예외 처리 로직 유지)
-        print(f"[ERROR Orchestrator] Unhandled exception in orchestration for session {session_id}: {e}")
-        import traceback
+    except HTTPException:
+        raise
+    except Exception as e_invoke:
+        print(f"  [ERROR Orchestrator] Exception during graph execution for session {session_id}: {type(e_invoke).__name__}")
         traceback.print_exc()
-        if "LogStreamCallbackHandler" in str(e): 
-             print("  [WARN Orchestrator] Ignoring LogStreamCallbackHandler error.")
-             if not isinstance(e, HTTPException): raise HTTPException(status_code=500, detail=f"Internal error during callback: {e}")
-             else: raise
-        elif not isinstance(e, HTTPException): raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
-        else: raise
+        assistant_response_to_user = f"(오류: 그래프 실행 중 문제 발생 - {e_invoke})"
+
+    # ... (상태 저장 로직 및 최종 반환 로직은 이전 답변의 v6와 동일하게 유지) ...
+    if not (final_state_to_save and isinstance(final_state_to_save, dict)):
+        print(f"  [WARN Orchestrator] final_state_to_save is not a valid dictionary. Attempting to use graph_input for saving.")
+        final_state_to_save = graph_input if isinstance(graph_input, dict) else {}
+            
+    if "messages" not in final_state_to_save:
+        final_state_to_save["messages"] = []
+
+    current_messages_for_save_processing = final_state_to_save.get("messages", [])
+    processed_messages_for_state = [] 
+    if isinstance(current_messages_for_save_processing, list):
+        for i, msg_data in enumerate(current_messages_for_save_processing):
+            if isinstance(msg_data, BaseMessage):
+                processed_messages_for_state.append(msg_data)
+            elif isinstance(msg_data, dict) and "type" in msg_data and "content" in msg_data:
+                msg_type, content, add_kwargs = msg_data.get("type"), msg_data.get("content"), msg_data.get("additional_kwargs", {})
+                if content is not None:
+                    if msg_type == "human": processed_messages_for_state.append(HumanMessage(content=content, additional_kwargs=add_kwargs))
+                    elif msg_type == "ai" or msg_type == "assistant": processed_messages_for_state.append(AIMessage(content=content, additional_kwargs=add_kwargs))
+            
+        final_state_to_save["messages"] = processed_messages_for_state 
+    else:
+        print(f"  [WARN Orchestrator] 'messages' in final_state_to_save is not a list. Resetting to empty list for saving.")
+        final_state_to_save["messages"] = []
+
+    print(f"  [DEBUG Orchestrator] Value of 'has_asked_initial' in final_state_to_save BEFORE serialization: {final_state_to_save.get('has_asked_initial')}")
+    print(f"  [DEBUG Orchestrator] Content of 'messages' in final_state_to_save BEFORE serialization (showing last 3): {[m.content if isinstance(m, BaseMessage) else (m.get('content') if isinstance(m, dict) else m) for m in final_state_to_save.get('messages', [])[-3:]]}")
+
+    try:
+        serializable_state_for_db = _serialize_state_for_db(final_state_to_save)
+        if serializable_state_for_db:
+            print(f"  [DEBUG Orchestrator] Value of 'has_asked_initial' in serializable_state_for_db: {serializable_state_for_db.get('has_asked_initial')}")
+            await user_store.upsert(session_id, serializable_state_for_db)
+            print(f"  [DEBUG Orchestrator] ✓ State saved to UserStore for session {session_id} (keys: {list(serializable_state_for_db.keys())}).")
+        else:
+            print(f"  [WARN Orchestrator] Serializable state for UserStore is empty. Session: {session_id}. Original final_state_to_save keys: {list(final_state_to_save.keys()) if isinstance(final_state_to_save, dict) else 'N/A'}")
+    except Exception as e_upsert:
+        print(f"  [ERROR Orchestrator] Failed to upsert final state to UserStore: {e_upsert}")
+        traceback.print_exc()
+        if not assistant_response_to_user or assistant_response_to_user.startswith("다음 탐색이 완료되었거나"):
+             assistant_response_to_user = "(오류: 대화 상태 저장에 실패했습니다. 다음 대화에 영향이 있을 수 있습니다.)"
+
+    if not (assistant_response_to_user and str(assistant_response_to_user).strip()):
+         print(f"  [WARN Orchestrator] Final assistant_response_to_user is empty or None. Setting default. Was: '{assistant_response_to_user}'")
+         assistant_response_to_user = "요청이 처리되었으나 반환할 특정 메시지가 없습니다."
+
+    print(f"[DEBUG Orchestrator] --- Ending Turn --- Session: {session_id} --- Returning: '{str(assistant_response_to_user)[:100]}...'")
+    return str(assistant_response_to_user)
+
