@@ -18,6 +18,7 @@ import TransitionOverlay from "@/features/select/components/TransitionOverlay";
 import { useAgentStore } from "@/lib/store/agentStore";
 import { useSelectStore } from "@/features/select/store";
 import { useSelectInput } from "@/features/select/hooks/useSelectInput";
+import { createSession } from "@/lib/api";
 
 const MIN_READY = 1;
 
@@ -47,14 +48,24 @@ export default function SelectScreen() {
 
   /* Next 클릭 */
   const router = useRouter();
-  const handleNext = () => {
+  const handleNext = async () => {
     if (readyCount < MIN_READY) return;
     setShowOv(true);
     playSFX("confirm");
     const ids = useAgentStore.getState().readyIds;
-    setTimeout(() => {
+
+    setTimeout(async () => {
       if (ids.length === 1) {
-        router.push(`/chat/agent?agent=${ids[0]}`);
+        const agentId = ids[0];
+        const meta = roster.find(c => c.id === agentId);
+        const topic = meta ? `${meta.name} 세션` : "토론 세션";
+
+        try {
+          const sessionId = await createSession(topic, agentId);
+          router.push(`/chat/${sessionId}?topic=${encodeURIComponent(topic)}&agent=${agentId}`);
+        } catch (e) {
+          alert("세션 생성 실패: " + (e instanceof Error ? e.message : e));
+        }
       } else {
         router.push(`/chat/multi?agents=${ids.join(",")}`);
       }
@@ -72,7 +83,7 @@ export default function SelectScreen() {
         animate={showIntro ? { scale: 2, opacity: 0 } : { scale: 1, opacity: 1 }}
         transition={{ duration: 2, ease: "easeInOut" }}
       />
-      <BackgroundImage introDone={introDone}/>
+      <BackgroundImage introDone={introDone} />
 
       {/* 오버레이 */}
       <AnimatePresence>
@@ -88,61 +99,57 @@ export default function SelectScreen() {
 
       {/* 메인 UI */}
       <AnimatePresence>
-      {introDone && (
-        <motion.div
-          className="relative z-20 flex flex-col items-center justify-center h-full gap-6"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 1, delay: 0.2 }}
-        >
-          {/* 상단 컨트롤 */}
-          <div className="absolute top-4 right-4 flex space-x-2">
-            <SoundToggle />
-            <BGMManager />
-          </div>
+        {introDone && (
+          <motion.div
+            className="relative z-20 flex flex-col items-center justify-center h-full gap-6"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 1, delay: 0.2 }}
+          >
+            {/* 상단 컨트롤 */}
+            <div className="absolute top-4 right-4 flex space-x-2">
+              <SoundToggle />
+              <BGMManager />
+            </div>
 
-          {/* 제목 */}
-          <h1 className="text-3xl font-extrabold">
-            🚀 Think Deeper: 에이전트 선택
-          </h1>
+            {/* 제목 */}
+            <h1 className="text-3xl font-extrabold">
+              🚀 Deep Thinker: 에이전트 선택
+            </h1>
 
-          {/* 캐릭터 그리드 + InfoPanel 묶음 */}
-          <div className="flex justify-center items-center gap-8 px-6 w-full">
-          {/* ① 전체 묶음에만 max-width */}
-          <div className="flex justify-center items-center gap-8 max-w-[90vw] mx-auto w-full">
-     
-         {/* ② 그리드는 줄어들 수 있게, w-full */}
-          <div className="w-full flex-shrink">
-           <CharacterGrid roster={roster} />
-        </div>
-     
-         {/* ③ 패널은 고정폭, 절대 줄어들지 않게 */}
-        {cursor !== null && roster[cursor] && (
-          <div className="ml-12 flex-shrink-0 w-[340px] h-[360px] flex flex-col justify-center">
-         <InfoPanel meta={roster[cursor]} />
-        </div>
-         )}
-         </div>
-          </div>
+            {/* 캐릭터 그리드 + InfoPanel 묶음 */}
+            <div className="flex justify-center items-center gap-8 px-6 w-full">
+              <div className="flex justify-center items-center gap-8 max-w-[90vw] mx-auto w-full">
+                <div className="w-full flex-shrink">
+                  <CharacterGrid roster={roster} />
+                </div>
 
-          {/* Next 버튼 */}
-          <div className="mt-6 flex justify-center">
-            <button
-              onClick={handleNext}
-              disabled={readyCount < MIN_READY}
-              className={clsx(
-                "px-8 py-3 rounded-lg font-semibold transition-colors duration-150",
-                "border-2 border-white/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-white",
-                readyCount >= MIN_READY
-                  ? "bg-primary text-white hover:bg-primary/90"
-                  : "bg-surface text-slate-400 opacity-40 cursor-not-allowed"
-              )}
-            >
-              NEXT
-            </button>
-          </div>
-        </motion.div>
-      )}
+                {cursor !== null && roster[cursor] && (
+                  <div className="ml-12 flex-shrink-0 w-[340px] h-[360px] flex flex-col justify-center">
+                    <InfoPanel meta={roster[cursor]} />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Next 버튼 */}
+            <div className="mt-6 flex justify-center">
+              <button
+                onClick={handleNext}
+                disabled={readyCount < MIN_READY}
+                className={clsx(
+                  "px-8 py-3 rounded-lg font-semibold transition-colors duration-150",
+                  "border-2 border-white/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-white",
+                  readyCount >= MIN_READY
+                    ? "bg-primary text-white hover:bg-primary/90"
+                    : "bg-surface text-slate-400 opacity-40 cursor-not-allowed"
+                )}
+              >
+                NEXT
+              </button>
+            </div>
+          </motion.div>
+        )}
       </AnimatePresence>
 
       {/* 클릭 시 잉크 스플래시 */}

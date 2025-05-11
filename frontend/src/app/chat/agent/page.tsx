@@ -4,16 +4,12 @@ import PageFade from "@/components/PageFade";
 import ChatScreen from "@/features/chat/ChatScreen";
 import data from "@/features/select/data/characters.json" assert { type: "json" };
 import type { CharacterMeta } from "@/features/select/types";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
-interface Props {
-  searchParams: { agent?: string };
-}
-
-export default function AgentPage({ searchParams }: Props) {
+export default function AgentPage() {
   const router = useRouter();
-  // Server 기능(notFound) 사용 불가이므로 간단 검증만
-  const id = searchParams.agent ?? "";
+  const searchParams = useSearchParams();
+  const id = searchParams.get("agent") ?? "";
   const character = (data as CharacterMeta[]).find((c) => c.id === id) ?? {
     id: "unknown",
     name: "Unknown",

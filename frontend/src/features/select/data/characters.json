@@ -50,14 +50,14 @@
     "description": "빠르게 아이디어를 조합하고 새로운 전략을 설계하는 전술가입니다."
   },
   {
-    "id": "skeptic",
-    "name": "skeptic",
-    "role": "분석가",
+    "id": "socratic",
+    "name": "socratic",
+    "role": "소크라테스형",
     "country": "JP",
-    "portrait": "/img/roster/skeptic.png",
-    "model": "/models/skeptic.glb",
+    "portrait": "/img/roster/socratic.png",
+    "model": "/models/socratic.glb",
     "stats": { "power": 50, "logic": 97, "empathy": 45, "speed": 68 },
-    "description": "쉽게 믿지 않고, 철저한 검증과 의심으로 진실에 다가갑니다."
+    "description": "쉽게 결정내리지 않고, 철저한 검증 과정으로 논리적 사고를 합니다."
   },
   {
     "id": "summarizer",

@@ -2,33 +2,18 @@
 "use client";
 
 import { motion, AnimatePresence } from "framer-motion";
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
 import { useAgentStore } from "@/lib/store/agentStore";
 import { useCharacters } from "@/features/select/lib/useCharacters";
+
 export default function TransitionOverlay() {
   const showOv = useAgentStore((s) => s.showOverlay);
   const readyIds = useAgentStore((s) => s.readyIds);
   const roster = useCharacters();
-  const router = useRouter(); // ✅ 이 줄 추가!
 
   const left = roster.find((c) => c.id === readyIds[0]);
   const right = roster.find((c) => c.id === readyIds[1]);
 
-  useEffect(() => {
-    if (!showOv) return;
-
-    const timer = setTimeout(() => {
-      if (readyIds.length === 1) {
-        router.push(`/chat/agent?agent=${readyIds[0]}`);
-      } else {
-        router.push(`/chat/multi?agents=${readyIds.join(",")}`);
-      }
-    }, 2200); // ⏳ 2.2초 후 라우팅
-
-    return () => clearTimeout(timer);
-  }, [showOv]);
-
+  // ✅ 라우팅 제거: router.push() 없이 전환 효과만 유지
   if (!showOv) return null;
 
   return (

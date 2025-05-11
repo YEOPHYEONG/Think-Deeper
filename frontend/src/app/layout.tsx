@@ -10,7 +10,7 @@ import BGMManager from '@/features/select/components/BGMManager';
 const poppins = Poppins({ subsets: ['latin'], weight: ['700'] });
 
 export const metadata: Metadata = {
-  title: 'Think Deeper',
+  title: 'Deep Thinker',
   description: 'AI 기반 다각적 사고 증진 서비스',
 };
 
@@ -28,7 +28,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
          "
        >
           <Link href="/" className={`${poppins.className} text-3xl text-indigo-400`}>
-            Think Deeper
+            Deep Thinker
           </Link>
         </header>
 
@@ -46,7 +46,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 
         {/* 선택적 푸터 */}
         <footer className="flex-shrink-0 py-2 text-center text-slate-500 text-sm">
-          © {new Date().getFullYear()} Think Deeper
+          © {new Date().getFullYear()} Deep Thinker
         </footer>
       </body>
     </html>

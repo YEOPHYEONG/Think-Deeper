@@ -20,18 +20,36 @@ export default function BackgroundImage({ introDone }: { introDone: boolean }) {
   return (
     <AnimatePresence>
       {selected.map((c, idx) => {
-        const leftOffset = sliceWidth * idx; // 각 이미지의 왼쪽 위치(%)
+        let style: React.CSSProperties;
+        if (count === 2) {
+          style = {
+            width: "50%",
+            left: `${50 * idx}%`,
+            zIndex: idx,
+            opacity: 0.9,
+          };
+        } else if (count === 1) {
+          style = {
+            width: "100%",
+            left: 0,
+            zIndex: idx,
+            opacity: 0.9,
+          };
+        } else {
+          const leftOffset = sliceWidth * idx;
+          style = {
+            width: `${sliceWidth}%`,
+            left: `${leftOffset}%`,
+            zIndex: idx,
+            opacity: 0.9,
+          };
+        }
         return (
           <motion.img
             key={c.id}
             src={`/img/backgrounds/${c.id}.png`}
-            className="absolute top-0 h-full object-contain pointer-events-none bg-black/50"
-            style={{
-              // 너비를 전체 나눈 만큼 지정, 좌측 오프셋도 %
-              width: `${sliceWidth}%`,
-              left: `${leftOffset}%`,
-              zIndex: idx,
-            }}
+            className={`absolute top-0 h-full pointer-events-none bg-black/50 ${count === 1 ? "object-contain" : "object-cover"}`}
+            style={style}
             initial={{ opacity: 0 }}
             animate={{ opacity: 0.9 }}
             exit={{ opacity: 0 }}

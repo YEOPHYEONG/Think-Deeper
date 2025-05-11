@@ -19,7 +19,7 @@ export function TopicInput({ onStart }: { onStart: (topic: string, agentType: st
 
   return (
     <div className="w-full max-w-xl mx-auto space-y-4">
-      <h1 className="text-3xl text-slate-100 font-bold text-center">🧠 Think Deeper</h1>
+      <h1 className="text-3xl text-slate-100 font-bold text-center">🧠 Deep Thinker</h1>
       <p className="text-slate-400 text-center">주제를 입력하면, 선택한 AI 파트너와 사고를 시작합니다.</p>
       {/* --- Input은 그대로 유지 --- */}
        <Input
