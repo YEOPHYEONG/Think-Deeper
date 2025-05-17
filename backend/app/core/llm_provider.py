@@ -4,8 +4,14 @@ from langchain_openai import ChatOpenAI # OpenAI 클라이언트 임포트
 # from langchain_anthropic import ChatAnthropic
 from functools import lru_cache
 from .config import get_settings
+from typing import TypedDict, Dict, Any, Optional
 
 settings = get_settings()
+
+class WhyGraphState(TypedDict, total=False):
+    # ... 기존 필드들 ...
+    assumption_insights: Dict[str, Dict[str, Any]]  # 가정별 인사이트 저장
+    final_assumption_analysis: Optional[str]  # 모든 가정 탐구 후 종합 분석
 
 @lru_cache()
 def get_llm_client(provider: str = "openai", model_name: str = "gpt-4o", temperature: float = 0.7): # 기본 provider/model 변경
@@ -48,7 +54,7 @@ def get_llm_client(provider: str = "openai", model_name: str = "gpt-4o", tempera
 def get_high_performance_llm():
     """ 기본 고성능 LLM 반환 (예: GPT-4o) """
     # 원하는 OpenAI 모델명으로 변경 (예: "gpt-4o", "gpt-4-turbo")
-    return get_llm_client(provider="openai", model_name="gpt-4.1-mini-2025-04-14", temperature=0.7)
+    return get_llm_client(provider="openai", model_name="gpt-4o-2024-08-06", temperature=0.7)
 
 def get_fast_llm():
     """ 기본 빠른 LLM 반환 (예: GPT-4o Mini) """
