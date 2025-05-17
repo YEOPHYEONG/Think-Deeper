@@ -10,8 +10,16 @@ export default function TransitionOverlay() {
   const readyIds = useAgentStore((s) => s.readyIds);
   const roster = useCharacters();
 
+  const userCharacter = {
+    id: "user",
+    name: "USER",
+    role: "플레이어",
+    portrait: "/img/roster/user.png",
+    vsPortrait: "/img/roster/user.png",
+  };
+
   const left = roster.find((c) => c.id === readyIds[0]);
-  const right = roster.find((c) => c.id === readyIds[1]);
+  const right = roster.find((c) => c.id === readyIds[1]) || userCharacter;
 
   // ✅ 라우팅 제거: router.push() 없이 전환 효과만 유지
   if (!showOv) return null;
@@ -38,9 +46,9 @@ export default function TransitionOverlay() {
         {/* 👤 좌측 캐릭터 */}
         {left && (
           <motion.img
-            src={left.portrait}
+            src={left.vsPortrait || left.portrait}
             alt={left.name}
-            className="absolute left-12 bottom-20 h-[380px] z-50 object-contain drop-shadow-xl"
+            className="absolute left-0 top-1/2 -translate-y-1/2 ml-16 h-[600px] z-50 object-contain drop-shadow-xl"
             initial={{ x: -300, opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
             transition={{ duration: 0.6, ease: "easeOut" }}
@@ -50,9 +58,9 @@ export default function TransitionOverlay() {
         {/* 👤 우측 캐릭터 */}
         {right && (
           <motion.img
-            src={right.portrait}
+            src={right.vsPortrait || right.portrait}
             alt={right.name}
-            className="absolute right-12 bottom-20 h-[380px] z-50 object-contain drop-shadow-xl scale-x-[-1]"
+            className="absolute right-0 top-1/2 -translate-y-1/2 mr-16 h-[600px] z-50 object-contain drop-shadow-xl scale-x-[-1]"
             initial={{ x: 300, opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
             transition={{ duration: 0.6, ease: "easeOut" }}

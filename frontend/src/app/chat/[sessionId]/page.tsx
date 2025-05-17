@@ -5,6 +5,7 @@
 import { use } from "react";
 import { useSearchParams } from "next/navigation";
 import { TurnExchange } from "@/components/TurnExchange";
+import Link from "next/link";
 
 // --- 에이전트 타입별 표시 이름 및 이모지 매핑 ---
 const AGENT_DISPLAY_INFO: { [key: string]: { name: string; emoji: string } } = {
@@ -34,17 +35,18 @@ export default function ChatPage({
 
   return (
     // --- flex-1 및 h-full 제거하여 내용만큼 높이 차지하도록 변경 가능 (선택사항) ---
-    <div className="flex flex-col w-full max-w-3xl mx-auto h-screen"> {/* 화면 전체 높이 사용 */}
+    <div className="flex flex-col w-full h-screen"> {/* 화면 전체 높이와 너비 사용 */}
       {/* --- 헤더 영역: 주제 및 현재 에이전트 표시 --- */}
-      {(topic || agentType !== 'default') && ( // 주제 또는 기본 에이전트가 아닐 때 헤더 표시
-        <div className="px-4 py-3 bg-slate-800 text-slate-300 border-b border-slate-700 rounded-t-xl flex justify-between items-center flex-shrink-0"> {/* 높이 고정 */}
-          <div className="text-sm truncate pr-2"> {/* 주제가 길 경우 잘림 처리 */}
-             <span className="font-semibold text-slate-100">토론 주제:</span>{" "}
-             <span className="text-indigo-400">{topic || "없음"}</span>
+      {(topic || agentType !== 'default') && (
+        <div className="px-6 py-4 text-slate-100 border-b-2 border-indigo-500 shadow-lg rounded-t-2xl flex justify-between items-center flex-shrink-0 gap-4" style={{ backgroundColor: '#0c0c1a00' }}>
+          {/* ← 뒤로가기 버튼 */}
+          <Link href="/select" className="text-2xl font-bold text-indigo-400 hover:text-indigo-300 transition-colors mr-2 flex items-center"><span className="text-3xl mr-1">←</span> </Link>
+          <div className="flex-1 flex flex-col min-w-0">
+            <div className="text-lg font-bold text-indigo-300 truncate">토론 주제: <span className="text-white">{topic || "없음"}</span></div>
           </div>
-          <div className="text-sm font-medium bg-slate-700 px-2 py-1 rounded">
-            {/* 이모지와 이름 표시 */}
-            {agentInfo.emoji} {agentInfo.name}
+          <div className="flex items-center gap-2 bg-indigo-700/80 px-4 py-2 rounded-xl shadow font-bold text-lg text-white">
+            <span className="text-2xl">{agentInfo.emoji}</span>
+            <span>{agentInfo.name}</span>
           </div>
         </div>
       )}
@@ -53,7 +55,7 @@ export default function ChatPage({
       {/* --- 채팅창 영역: 남은 공간 모두 차지 --- */}
       {/* 헤더가 있으면 상단 모서리 둥글게 처리 제거, 하단만 유지 */}
       <div className={`flex-1 flex flex-col bg-slate-900 overflow-hidden ${ (topic || agentType !== 'default') ? 'rounded-b-xl' : 'rounded-xl'}`}>
-        <TurnExchange sessionId={sessionId} />
+        <TurnExchange sessionId={sessionId} agentType={agentType} />
       </div>
       {/* --- --- */}
     </div>

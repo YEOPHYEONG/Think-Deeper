@@ -20,8 +20,8 @@ export const useSelectStore = create<SelectState>((set) => ({
 
   move: (dir) =>
     set((s) => {
-      const map: Record<Dir, number> = { up: -4, down: 4, left: -1, right: 1 };
-      const next = (s.cursor + map[dir] + 8) % 8;
+      const map: Record<Dir, number> = { up: -2, down: 2, left: -1, right: 1 };
+      const next = (s.cursor + map[dir] + 4) % 4;
       return { cursor: next };
     }),
 

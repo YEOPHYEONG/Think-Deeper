@@ -4,15 +4,23 @@ import type { Config } from "tailwindcss";
 export default {
   // 1) Tailwind가 스캔할 파일 경로
   content: [
-    "./src/**/*.{js,ts,jsx,tsx,mdx}",
+    "./src/pages/**/*.{js,ts,jsx,tsx,mdx}",
+    "./src/components/**/*.{js,ts,jsx,tsx,mdx}",
+    "./src/app/**/*.{js,ts,jsx,tsx,mdx}",
+    "./src/features/**/*.{js,ts,jsx,tsx,mdx}",
   ],
 
   // 2) 토큰 확장
   theme: {
     extend: {
+      backgroundImage: {
+        "gradient-radial": "radial-gradient(var(--tw-gradient-stops))",
+        "gradient-conic":
+          "conic-gradient(from 180deg at 50% 50%, var(--tw-gradient-stops))",
+      },
       colors: {
-        primary: "#6366F1",        // 핵심 포인트색 (indigo-500)
-        surface: "#1E1E2A",        // 카드/버튼 기본 배경
+        primary: "#7c86ff",        // 핵심 포인트색 (indigo-500)
+        surface: "#1e1e2e",        // 카드/버튼 기본 배경
         "surface-hover": "#26263A" // 호버 배경
       },
       dropShadow: {
@@ -20,6 +28,18 @@ export default {
       },
       borderRadius: {
         lg: "0.75rem",             // 카드 둥글기
+      },
+      perspective: {
+        '1000': '1000px',
+      },
+      transformStyle: {
+        '3d': 'preserve-3d',
+      },
+      backfaceVisibility: {
+        'hidden': 'hidden',
+      },
+      rotate: {
+        'y-180': 'rotateY(180deg)',
       },
     },
   },

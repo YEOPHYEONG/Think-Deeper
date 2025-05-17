@@ -10,9 +10,6 @@ import { useCharacters } from "./lib/useCharacters";
 import BackgroundImage from "@/features/select/components/BackgroundImage";
 import CharacterGrid from "@/features/select/components/CharacterGrid";
 import InfoPanel from "@/features/select/components/InfoPanel";
-import BGMManager from "@/features/select/components/BGMManager";
-import SoundToggle from "./components/SoundToggle";
-import { playSFX } from "./components/SFXManager";
 import TransitionOverlay from "@/features/select/components/TransitionOverlay";
 
 import { useAgentStore } from "@/lib/store/agentStore";
@@ -51,7 +48,6 @@ export default function SelectScreen() {
   const handleNext = async () => {
     if (readyCount < MIN_READY) return;
     setShowOv(true);
-    playSFX("confirm");
     const ids = useAgentStore.getState().readyIds;
 
     setTimeout(async () => {
@@ -106,34 +102,20 @@ export default function SelectScreen() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 1, delay: 0.2 }}
           >
-            {/* 상단 컨트롤 */}
-            <div className="absolute top-4 right-4 flex space-x-2">
-              <SoundToggle />
-              <BGMManager />
-            </div>
-
             {/* 제목 */}
-            <h1 className="text-3xl font-extrabold">
-              🚀 Deep Thinker: 에이전트 선택
+            <h1 className="text-3xl font-extrabold mt-6 mb-6">
+              Deep Thinker: 에이전트 선택
             </h1>
 
             {/* 캐릭터 그리드 + InfoPanel 묶음 */}
-            <div className="flex justify-center items-center gap-8 px-6 w-full">
-              <div className="flex justify-center items-center gap-8 max-w-[90vw] mx-auto w-full">
-                <div className="w-full flex-shrink">
-                  <CharacterGrid roster={roster} />
-                </div>
-
-                {cursor !== null && roster[cursor] && (
-                  <div className="ml-12 flex-shrink-0 w-[340px] h-[360px] flex flex-col justify-center">
-                    <InfoPanel meta={roster[cursor]} />
-                  </div>
-                )}
+            <div className="relative flex-1 w-full max-w-[1600px] mx-auto px-4">
+              <div className="w-full h-full">
+                <CharacterGrid roster={roster} />
               </div>
             </div>
 
             {/* Next 버튼 */}
-            <div className="mt-6 flex justify-center">
+            <div className="mb-6 mt-4 flex justify-center">
               <button
                 onClick={handleNext}
                 disabled={readyCount < MIN_READY}

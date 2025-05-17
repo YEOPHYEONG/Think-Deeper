@@ -12,6 +12,7 @@ export interface CharacterMeta {
   role: string;
   country: string;
   portrait: string;
+  vsPortrait?: string;
   model?: string;        // 3D GLB 경로 (선택)
   stats?: CharacterStats;
   description?: string;
